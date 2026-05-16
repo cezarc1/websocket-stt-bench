@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Create the pinned stock-OCaml opam switch and install the Async/WebSocket
-# gateway dependencies. Set OCAML_STOCK_SWITCH=default to reuse an existing
+# Create the pinned stock-OCaml opam switch and install the Async gateway
+# dependencies. Set OCAML_STOCK_SWITCH=default to reuse an existing
 # local stock switch whose compiler is already the pinned version.
 set -euo pipefail
 
@@ -37,8 +37,6 @@ declare -a packages=(
   core
   core_unix
   async
-  cohttp-async
-  websocket-async
   yojson
   ppx_jane
   alcotest

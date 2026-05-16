@@ -540,9 +540,8 @@ services:
     ports:
       - "9001:9000"
 
-  # Stock OCaml 5.4.1 + Async/cohttp/websocket-async comparison point for
-  # the OxCaml gateway. The transport uses ecosystem libraries instead of
-  # the hand-rolled RFC 6455/HTTP upgrade required by the OxCaml switch.
+  # Stock OCaml 5.4.1 + Async raw WebSocket gateway for upstream-OCaml
+  # behavior without the OxCaml compiler/runtime fork.
   ocaml-websocket-async-single:
     <<: *app-single
     mem_limit: 2g

@@ -1,5 +1,5 @@
-# Stock OCaml Async + websocket-async gateway image. Unlike the OxCaml image,
-# this uses the upstream OCaml opam image and the ecosystem WebSocket stack.
+# Stock OCaml Async gateway image. Uses the upstream OCaml opam image while
+# keeping the hot transport path raw enough for a best-effort runtime result.
 
 ARG OPAM_BASE_IMAGE=ocaml/opam:debian-12-ocaml-5.4
 ARG DEBIAN_RUNTIME_IMAGE=debian:12-slim
@@ -13,9 +13,7 @@ RUN apt-get update \
     build-essential \
     ca-certificates \
     libgmp-dev \
-    libssl-dev \
     pkg-config \
-    zlib1g-dev \
  && rm -rf /var/lib/apt/lists/*
 
 USER opam
@@ -30,8 +28,6 @@ RUN --mount=type=cache,target=/home/opam/.opam/download-cache,uid=1000,gid=1000 
     core \
     core_unix \
     async \
-    cohttp-async \
-    websocket-async \
     yojson \
     ppx_jane \
     alcotest \
@@ -54,7 +50,6 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
     ca-certificates \
     libgmp10 \
-    libssl3 \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/_build/default/bin/main.exe /usr/local/bin/stt-ocaml-websocket-async

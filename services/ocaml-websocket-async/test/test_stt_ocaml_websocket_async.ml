@@ -1,6 +1,9 @@
 open! Core
+open! Async
 module P = Stt_ocaml_websocket_async.Protocol
 module S = Stt_ocaml_websocket_async.Session
+module Wf = Stt_ocaml_websocket_async.Websocket_frame
+module Wh = Stt_ocaml_websocket_async.Websocket_handshake
 
 let test_config =
   { Stt_ocaml_websocket_async.Config.port = 9100
@@ -103,6 +106,58 @@ let test_runtime_version () =
     Stt_ocaml_websocket_async.Runtime.expected_ocaml_version
 ;;
 
+let test_websocket_accept_key_vector () =
+  Alcotest.(check string)
+    "accept key"
+    "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+    (Wh.accept_key ~key:"dGhlIHNhbXBsZSBub25jZQ==")
+;;
+
+let test_websocket_upgrade_validation () =
+  let req ?(version = "HTTP/1.1") ?(connection = "keep-alive, Upgrade") () =
+    { Stt_ocaml_websocket_async.Http1.meth = "GET"
+    ; path = "/ws/stt"
+    ; version
+    ; headers =
+        [ "upgrade", "websocket"
+        ; "connection", connection
+        ; "sec-websocket-version", "13"
+        ; "sec-websocket-key", "key"
+        ]
+    }
+  in
+  Alcotest.(check (option string)) "valid" (Some "key") (Wh.upgrade_key (req ()));
+  Alcotest.(check (option string))
+    "reject http/1.0"
+    None
+    (Wh.upgrade_key (req ~version:"HTTP/1.0" ()));
+  Alcotest.(check (option string))
+    "reject substring token"
+    None
+    (Wh.upgrade_key (req ~connection:"keep-alive, x-upgrade" ()))
+;;
+
+let test_server_text_frame_write_shape () =
+  let pipe_r, pipe_w = Core_unix.pipe () in
+  let writer =
+    Async.Writer.create (Async.Fd.create Fifo pipe_w (Info.of_string "ws-test-w"))
+  in
+  Async.Thread_safe.block_on_async_exn (fun () ->
+    Wf.write writer (Wf.text "ok") >>= fun () -> Writer.close writer);
+  let got = Bytes.create 4 in
+  let reader = Reader.create (Async.Fd.create Fifo pipe_r (Info.of_string "ws-test-r")) in
+  let read =
+    Async.Thread_safe.block_on_async_exn (fun () ->
+      Reader.really_read reader ~len:4 got
+      >>| function
+      | `Ok -> 4
+      | `Eof n -> n)
+  in
+  Async.Thread_safe.block_on_async_exn (fun () -> Reader.close reader);
+  Alcotest.(check int) "bytes read" 4 read;
+  Alcotest.(check string) "wire bytes" "\x81\x02ok" (Bytes.to_string got)
+;;
+
 let () =
   Command_unix.run
     (Command.basic
@@ -137,6 +192,20 @@ let () =
                     "expected stock OCaml version constant"
                     `Quick
                     test_runtime_version
+                ] )
+            ; ( "websocket"
+              , [ Alcotest.test_case
+                    "accept key matches RFC vector"
+                    `Quick
+                    test_websocket_accept_key_vector
+                ; Alcotest.test_case
+                    "upgrade validation is token/version strict"
+                    `Quick
+                    test_websocket_upgrade_validation
+                ; Alcotest.test_case
+                    "server text frame writes unmasked payload"
+                    `Quick
+                    test_server_text_frame_write_shape
                 ] )
             ])))
 ;;

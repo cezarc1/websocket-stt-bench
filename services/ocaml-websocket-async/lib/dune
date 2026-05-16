@@ -6,10 +6,6 @@
   core_unix
   core_unix.time_ns_unix
   async
-  cohttp
-  cohttp-async
-  websocket
-  websocket-async
   yojson)
  (preprocess
   (pps ppx_jane))
