@@ -97,6 +97,15 @@ x-rust-env: &rust-env
   PORT: "3000"
   INFERENCE_URL: "http://inference-server:9000"
 
+x-rust-sync-env: &rust-sync-env
+  CPU_PASSES: "4"
+  MODEL_DELAY_MS: "75"
+  FLUSH_INTERVAL_MS: "1000"
+  FLUSH_PHASE_JITTER_MS: "1000"
+  PORT: "10000"
+  INFERENCE_URL: "http://inference-server:9000"
+  MALLOC_ARENA_MAX: "2"
+
 x-typescript-env: &typescript-env
   CPU_PASSES: "4"
   MODEL_DELAY_MS: "75"
@@ -370,6 +379,41 @@ services:
       WORKER_THREADS: "4"
     ports:
       - "3001:3000"
+
+  # Canonical synchronous Rust gateway: one OS thread per connection,
+  # blocking I/O, no async runtime. The one-inflight-per-connection
+  # invariant is structural — a thread cannot issue a second inference
+  # POST until the first blocking call returns (no semaphore, no flag).
+  rust-sync-single:
+    <<: *app-single
+    mem_limit: 2g
+    profiles: ["single"]
+    build:
+      context: .
+      dockerfile: docker/rust-sync.Dockerfile
+    depends_on: *needs-inference
+    environment:
+      <<: *rust-sync-env
+      WORKER_THREADS: "1"
+    ulimits:
+      nproc: 65535
+    ports:
+      - "10001:10000"
+
+  rust-sync-multi:
+    <<: *app-multi
+    profiles: ["multi"]
+    build:
+      context: .
+      dockerfile: docker/rust-sync.Dockerfile
+    depends_on: *needs-inference
+    environment:
+      <<: *rust-sync-env
+      WORKER_THREADS: "4"
+    ulimits:
+      nproc: 65535
+    ports:
+      - "10001:10000"
 
   go-nethttp-single:
     <<: *app-single

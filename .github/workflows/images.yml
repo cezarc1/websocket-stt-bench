@@ -15,6 +15,7 @@ on:
       - "services/inference-server/**"
       - "services/python-fastapi/**"
       - "services/rust-axum/**"
+      - "services/rust-sync/**"
       - "services/typescript-bun/**"
       - "services/go-nethttp/**"
       - "services/java-helidon-nima/**"
@@ -37,6 +38,7 @@ on:
       - "services/inference-server/**"
       - "services/python-fastapi/**"
       - "services/rust-axum/**"
+      - "services/rust-sync/**"
       - "services/typescript-bun/**"
       - "services/go-nethttp/**"
       - "services/java-helidon-nima/**"
@@ -65,6 +67,9 @@ jobs:
             build_args: ""
           - image: rust-axum
             dockerfile: docker/rust-axum.Dockerfile
+            build_args: ""
+          - image: rust-sync
+            dockerfile: docker/rust-sync.Dockerfile
             build_args: ""
           - image: elixir-phoenix
             dockerfile: docker/elixir-phoenix.Dockerfile

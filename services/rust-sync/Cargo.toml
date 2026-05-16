@@ -1,0 +1,22 @@
+[package]
+name = "stt-rust-sync"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+# Explicit so the manifest is a valid workspace member even where only
+# Cargo.toml is copied (the other Rust service Dockerfiles do not vendor
+# this crate's src; without this, `cargo fetch` fails to load the
+# workspace).
+[[bin]]
+name = "stt-rust-sync"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tungstenite.workspace = true
+ureq.workspace = true
+rand.workspace = true
