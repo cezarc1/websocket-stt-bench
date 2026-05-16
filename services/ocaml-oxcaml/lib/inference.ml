@@ -88,9 +88,10 @@ let read_exact reader ~len =
   | `Ok -> return (Some (Bytes.unsafe_to_string ~no_mutation_while_string_reachable:buf))
 ;;
 
-let write_request t writer ~payload =
-  let body_len = Bigstring.length payload in
-  (* HTTP/1.1 default is keep-alive — no [Connection: close]. *)
+let write_request t writer ~body ~body_len =
+  (* HTTP/1.1 default is keep-alive — no [Connection: close]. The frame strings are
+     written sequentially after the head; the Writer buffers them so this is a single
+     flush, no concat allocation. *)
   Writer.write
     writer
     (sprintf
@@ -104,15 +105,15 @@ let write_request t writer ~payload =
        t.port
        t.cpu_passes_header
        body_len);
-  Writer.write_bigstring writer payload;
+  List.iter body ~f:(fun s -> Writer.write writer s);
   Writer.flushed writer
 ;;
 
 (* One request/response on an established (reader, writer). Returns [`Retry] when the
    connection looks dead (EOF before/within the response) so the caller can redial once. *)
-let exchange t (reader, writer) ~payload =
+let exchange t (reader, writer) ~body ~body_len =
   match%bind
-    Monitor.try_with ~here:[%here] (fun () -> write_request t writer ~payload)
+    Monitor.try_with ~here:[%here] (fun () -> write_request t writer ~body ~body_len)
   with
   | Error _ -> return `Retry
   | Ok () ->
@@ -139,7 +140,7 @@ let exchange t (reader, writer) ~payload =
         | Some len ->
           (match%bind read_exact reader ~len with
            | None -> return `Retry
-           | Some body ->
+           | Some resp_body ->
              if status <> 200
              then
                return
@@ -150,7 +151,7 @@ let exchange t (reader, writer) ~payload =
                       ~message:(sprintf "inference returned HTTP %d" status)
                       ~status:(Some status)))
              else (
-               match Yojson.Safe.from_string body with
+               match Yojson.Safe.from_string resp_body with
                | exception exn ->
                  return
                    (`Done
@@ -174,11 +175,11 @@ let exchange t (reader, writer) ~payload =
 
 let dial t = Tcp.connect t.where >>| fun (_sock, r, w) -> r, w
 
-let do_request t conn ~payload =
+let do_request t conn ~body ~body_len =
   (* Reuse the session's keep-alive connection; redial once if it's stale/closed (idle
      keep-alive timeout, server restart, etc.). *)
   let attempt rw =
-    exchange t rw ~payload
+    exchange t rw ~body ~body_len
     >>= function
     | `Done result -> return (`Done result)
     | `Retry -> return `Retry
@@ -209,11 +210,11 @@ let do_request t conn ~payload =
             ~status:None))
 ;;
 
-let send t ~conn ~capability ~payload =
+let send t ~conn ~capability ~body ~body_len =
   let token = Inflight_capability.consume capability in
   match%bind
     Monitor.try_with ~here:[%here] (fun () ->
-      Clock_ns.with_timeout request_timeout (do_request t conn ~payload))
+      Clock_ns.with_timeout request_timeout (do_request t conn ~body ~body_len))
   with
   | Ok (`Result result) -> return { result; token }
   | Ok `Timeout ->

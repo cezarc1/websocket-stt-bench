@@ -8,9 +8,12 @@ type close_action =
       ; reason : string
       }
 
+(* [payload] is the [Ws_frame] string verbatim — no Bigstring conversion on the 50
+   fps/session receive path. At flush the frame strings are written straight to the
+   inference socket (no concat buffer). *)
 type frame =
   { seq : int
-  ; payload : Bigstring.t
+  ; payload : string
   ; received_at : Time_ns.t
   }
 
@@ -37,30 +40,14 @@ let create ~config ~inference ~outbound =
   }
 ;;
 
-let on_binary (t : t) payload =
-  if Bigstring.length payload <> Protocol.frame_bytes
+let on_binary (t : t) (payload : string) =
+  if String.length payload <> Protocol.frame_bytes
   then
     Close { code = 1003; reason = sprintf "frame must be %d bytes" Protocol.frame_bytes }
   else (
     t.seq <- t.seq + 1;
     Queue.enqueue t.buffer { seq = t.seq; payload; received_at = Time_ns.now () };
     Continue)
-;;
-
-(* Returns the concatenated PCM and its total byte count so callers don't re-fold [frames]
-   for [audio_bytes]. *)
-let concat_payloads frames =
-  let total =
-    List.fold frames ~init:0 ~f:(fun acc f -> acc + Bigstring.length f.payload)
-  in
-  let dst = Bigstring.create total in
-  let _ : int =
-    List.fold frames ~init:0 ~f:(fun pos f ->
-      let len = Bigstring.length f.payload in
-      Bigstring.blit ~src:f.payload ~src_pos:0 ~dst ~dst_pos:pos ~len;
-      pos + len)
-  in
-  dst, total
 ;;
 
 let drain_buffer t =
@@ -171,12 +158,13 @@ let perform_flush t ~expected_at =
        let oldest_seq = oldest_frame.seq in
        let newest_seq = newest_frame.seq in
        let frame_count = List.length frames in
-       let payload, audio_bytes = concat_payloads frames in
+       let body = List.map frames ~f:(fun f -> f.payload) in
+       let audio_bytes = List.fold body ~init:0 ~f:(fun acc s -> acc + String.length s) in
        let emit s =
          if Pipe.is_closed t.outbound then return () else Pipe.write t.outbound s
        in
        let inference_start = Time_ns.now () in
-       Inference.send t.inference ~conn:t.inf_conn ~capability ~payload
+       Inference.send t.inference ~conn:t.inf_conn ~capability ~body ~body_len:audio_bytes
        >>= fun outcome ->
        let inference_elapsed_ms = ms_since inference_start in
        let%bind () =

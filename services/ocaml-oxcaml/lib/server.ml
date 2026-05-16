@@ -59,7 +59,7 @@ let rec receive_loop ~session ~reader ~writer ~outbound_writer ~started =
      | Ws_frame.Text -> protocol_close ()
      | Ws_frame.Binary when not !started -> protocol_close ()
      | Ws_frame.Binary ->
-       (match Session.on_binary session (Bigstring.of_string frame.payload) with
+       (match Session.on_binary session frame.payload with
         | Session.Continue -> continue ()
         | Session.Close { code; reason = _ } ->
           close_session writer ~outbound_writer ~code)

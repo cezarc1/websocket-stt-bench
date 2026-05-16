@@ -49,9 +49,13 @@ type outcome =
 
 val request_timeout : Time_ns.Span.t
 
+(** [body] is the list of raw PCM frame strings (verbatim from the WebSocket layer);
+    [body_len] is their total length. They are written straight to the socket after the
+    request head — no concat buffer. *)
 val send
   :  t
   -> conn:conn
   -> capability:Inflight_capability.t
-  -> payload:Bigstring.t
+  -> body:string list
+  -> body_len:int
   -> outcome Async.Deferred.t
