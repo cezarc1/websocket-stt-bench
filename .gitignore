@@ -6,6 +6,11 @@
 /results/*
 !/results/.gitkeep
 
+# Agent scratch (worktrees, plans, local settings) is not tracked; the
+# add-runtime skill is the only intentionally committed .claude/ content.
+/.claude/*
+!/.claude/skills/
+
 /.venv/
 /analysis/.venv/
 /services/python-fastapi/.venv/
@@ -16,6 +21,8 @@
 /services/elixir-phoenix/doc/
 /services/elixir-phoenix/.elixir_ls/
 /services/typescript-bun/node_modules/
+/services/ocaml-oxcaml/_build/
+/services/ocaml-oxcaml/_opam/
 
 # Bazel writes convenience symlinks (`bazel-bin`, `bazel-out`, `bazel-testlogs`,
 # `bazel-<workspace>`) into the workspace root. `.tools/` already covers

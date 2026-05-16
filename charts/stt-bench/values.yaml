@@ -295,6 +295,38 @@ gateways:
       limits:
         cpu: "2"
         memory: 2Gi
+  ocamlOxcaml:
+    enabled: true
+    name: stt-ocaml-oxcaml-gateway
+    image: ocaml-oxcaml
+    replicas: 0
+    port: 9000
+    env:
+      WORKER_THREADS: "1"
+      INFERENCE_HTTP_CLIENTS: "4"
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+  ocamlOxcaml2cpu:
+    enabled: true
+    name: stt-ocaml-oxcaml-2vcpu-gateway
+    image: ocaml-oxcaml
+    replicas: 0
+    port: 9000
+    env:
+      WORKER_THREADS: "2"
+      INFERENCE_HTTP_CLIENTS: "4"
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
 
 loadgen:
   enabled: true

@@ -50,6 +50,17 @@ x-cpp-build: &cpp-build
   args:
     BAZELISK_VERSION: "1.29.0"
 
+x-ocaml-build: &ocaml-build
+  context: .
+  dockerfile: docker/ocaml-oxcaml.Dockerfile
+  # Self-contained: builds the OxCaml switch + deps from source (~20-30
+  # min cold). Local iteration uses the opam switch directly, not this.
+  args:
+    OPAM_BASE_IMAGE: "ocaml/opam:debian-12-ocaml-5.2"
+    DEBIAN_RUNTIME_IMAGE: "debian:12-slim"
+    OXCAML_SWITCH: "5.2.0+ox"
+    OXCAML_REPO_COMMIT: "main"
+
 # FLUSH_INTERVAL_MS: gateway-to-inference batch cadence. Clients still upload
 # 20 ms PCM frames immediately, but gateways flush larger per-session batches
 # to reduce backend request overhead. The primary benchmark profile uses 1000 ms.
@@ -138,6 +149,19 @@ x-cpp-env: &cpp-env
   FLUSH_INTERVAL_MS: "1000"
   FLUSH_PHASE_JITTER_MS: "1000"
   PORT: "1500"
+  INFERENCE_URL: "http://inference-server:9000"
+
+x-ocaml-env: &ocaml-env
+  CPU_PASSES: "4"
+  MODEL_DELAY_MS: "75"
+  # Accepted for env parity with other gateways but currently a NO-OP:
+  # the OCaml client already uses one persistent keep-alive HTTP/1.1
+  # connection per session over raw Async.Tcp, and the
+  # one-inflight-per-connection invariant makes a pool pointless.
+  INFERENCE_HTTP_CLIENTS: "4"
+  FLUSH_INTERVAL_MS: "1000"
+  FLUSH_PHASE_JITTER_MS: "1000"
+  PORT: "9000"
   INFERENCE_URL: "http://inference-server:9000"
 
 # All gateway services depend on a healthy inference-server. Without this,
@@ -472,6 +496,33 @@ services:
       WORKER_THREADS: "4"
     ports:
       - "1501:1500"
+
+  # OxCaml gateway: the one-inflight-per-connection invariant is an opaque
+  # mint-once Inflight_capability type, enforced at RUNTIME by an Async
+  # Mvar (see services/ocaml-oxcaml/lib/inflight_capability.mli). Raw
+  # Async.Tcp transport + hand-rolled RFC 6455 framing.
+  ocaml-oxcaml-single:
+    <<: *app-single
+    mem_limit: 2g
+    profiles: ["single"]
+    build: *ocaml-build
+    depends_on: *needs-inference
+    environment:
+      <<: *ocaml-env
+      WORKER_THREADS: "1"
+    ports:
+      - "9001:9000"
+
+  ocaml-oxcaml-multi:
+    <<: *app-multi
+    profiles: ["multi"]
+    build: *ocaml-build
+    depends_on: *needs-inference
+    environment:
+      <<: *ocaml-env
+      WORKER_THREADS: "4"
+    ports:
+      - "9001:9000"
 
   loadgen:
     <<: *loadgen-limits

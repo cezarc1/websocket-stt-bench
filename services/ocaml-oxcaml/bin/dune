@@ -1,0 +1,7 @@
+(executable
+ (name main)
+ (public_name stt-ocaml-oxcaml)
+ (package stt_ocaml_oxcaml)
+ (libraries stt_ocaml_oxcaml core core_unix.command_unix async)
+ (flags
+  (:standard -w +a-40-42-44-48-58-66-70 -strict-sequence)))

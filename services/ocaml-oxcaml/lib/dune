@@ -1,0 +1,13 @@
+(library
+ (name stt_ocaml_oxcaml)
+ (public_name stt_ocaml_oxcaml)
+ (libraries
+  base
+  core
+  core_unix
+  core_unix.time_ns_unix
+  async
+  yojson)
+ (preprocess (pps ppx_jane))
+ (flags
+  (:standard -w +a-40-42-44-48-58-66-70 -strict-sequence)))
