@@ -205,10 +205,12 @@ subsection with the real bracket tables. Keep the TL;DR terse; depth goes in
 the sweep section.
 
 Regenerate the graph: the data points are **hardcoded** in
-`analysis/stt_analysis/comparison_chart_gen.py` (the `RUNTIMES`/`PARETO`
-tuples). Add your `(LOC, 1-vCPU sessions)` point, then:
-`cd analysis && ../.tools/bin/uv run python -m stt_analysis.comparison_chart_gen`
-(writes `docs/loc-vs-capacity.png`; check `--help`).
+`analysis/stt_analysis/comparison_chart_gen.py` — add a row to `RUNTIMES`
+(tuple order: `name, sessions@1vCPU, LOC, dx, dy, ha`; only add to `PARETO`
+if nothing else has both higher sessions *and* lower LOC), then run it from
+the `analysis/` dir with an explicit out path back to repo `docs/`:
+`cd analysis && ../.tools/bin/uv run python -m
+stt_analysis.comparison_chart_gen --out ../docs/loc-vs-capacity.png`.
 
 ### Phase 8 — Memory, then PR  ([ASK] before opening the PR)
 
