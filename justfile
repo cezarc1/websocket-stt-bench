@@ -194,18 +194,6 @@ ocaml-test: ensure-oxcaml-switch
 ocaml-fmt: ensure-oxcaml-switch
     cd services/ocaml-oxcaml && opam exec --switch "$(awk -F\" '/oxcaml_switch =/{print $2; exit}' ../../versions.lock.toml)" -- dune build @fmt --auto-promote --root .
 
-# Build the slow OxCaml-switch+deps base image once and tag it locally so the
-# gateway Dockerfile can FROM it. Re-run only when bumping
-# `oxcaml_repo_commit` in versions.lock.toml or changing the opam dep set.
-# Cold build: ~15-25 min (compiles the OxCaml compiler from source).
-ocaml-base-build:
-    docker build \
-      -f docker/ocaml-oxcaml-base.Dockerfile \
-      --build-arg OXCAML_SWITCH="$(awk -F\" '/oxcaml_switch =/{print $2; exit}' versions.lock.toml)" \
-      --build-arg OXCAML_REPO_COMMIT="$(awk -F\" '/oxcaml_repo_commit =/{print $2; exit}' versions.lock.toml)" \
-      -t stt-bench-oxcaml-base:5.2.0-ox \
-      .
-
 check: doctor python-check analysis-check ts-check go-check elixir-check rust-check java-check scala-check cpp-check ocaml-check
 
 bench-ladder service_name service_url:

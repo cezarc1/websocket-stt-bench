@@ -53,12 +53,13 @@ x-cpp-build: &cpp-build
 x-ocaml-build: &ocaml-build
   context: .
   dockerfile: docker/ocaml-oxcaml.Dockerfile
-  # Requires `just ocaml-base-build` to have produced
-  # `stt-bench-oxcaml-base:5.2.0-ox` locally (or pulled from a registry).
-  # The compose build only does the fast source-compile + runtime stage.
+  # Self-contained: builds the OxCaml switch + deps from source (~20-30
+  # min cold). Local iteration uses the opam switch directly, not this.
   args:
-    BASE_IMAGE: "stt-bench-oxcaml-base:5.2.0-ox"
+    OPAM_BASE_IMAGE: "ocaml/opam:debian-12-ocaml-5.2"
     DEBIAN_RUNTIME_IMAGE: "debian:12-slim"
+    OXCAML_SWITCH: "5.2.0+ox"
+    OXCAML_REPO_COMMIT: "main"
 
 # FLUSH_INTERVAL_MS: gateway-to-inference batch cadence. Clients still upload
 # 20 ms PCM frames immediately, but gateways flush larger per-session batches
