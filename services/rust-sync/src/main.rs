@@ -8,15 +8,22 @@ mod inference;
 mod protocol;
 mod session;
 
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::thread;
 
-use crate::config::{Config, STACK_BYTES};
+use socket2::{Domain, Socket, Type};
+
+use crate::config::{Config, LISTEN_BACKLOG, STACK_BYTES};
 
 fn main() {
     let config = Arc::new(Config::from_env());
-    let listener = TcpListener::bind(("0.0.0.0", config.port)).expect("bind listener");
+    let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
+    let socket = Socket::new(Domain::IPV4, Type::STREAM, None).expect("create socket");
+    socket.set_reuse_address(true).expect("set reuse address");
+    socket.bind(&addr.into()).expect("bind listener");
+    socket.listen(LISTEN_BACKLOG).expect("listen");
+    let listener = TcpListener::from(socket);
     eprintln!(
         "{{\"runtime\":\"rust-sync\",\"rust\":\"{}\",\"port\":{},\"inference_url\":\"{}\",\"flush_interval_ms\":{}}}",
         env!("CARGO_PKG_RUST_VERSION"),

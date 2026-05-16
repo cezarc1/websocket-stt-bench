@@ -31,6 +31,12 @@ const DEFAULT_FLUSH_PHASE_JITTER_MS: u64 = 0;
 pub const INFERENCE_CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 pub const INFERENCE_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Listen backlog. The loadgen opens every session within a ~1 s spread,
+/// so the default 128-deep accept queue overflows and the kernel drops
+/// SYNs (client-side connect timeouts) long before steady state. A deep
+/// queue lets the accept loop absorb the connect burst.
+pub const LISTEN_BACKLOG: i32 = 8192;
+
 /// Explicit per-connection thread stack. The default 2 MiB stack would cap
 /// the pod at ~1k connections under the 2 GiB limit; the work here is
 /// shallow (read → buffer → POST → relay) so 256 KiB is ample headroom.

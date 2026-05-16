@@ -80,20 +80,22 @@ fn header<'a>(lines: &'a std::str::Split<'a, &str>, name: &str) -> Option<&'a st
     })
 }
 
-/// Read up to and including the blank-line terminator. One byte per read
-/// keeps us from consuming WebSocket frame bytes into a buffer tungstenite
-/// can't see; this runs once per connection, off the hot path.
+/// Read up to the blank-line terminator. A WebSocket client must wait for
+/// the 101 before sending anything, so reading in chunks can't swallow
+/// frame bytes — and the byte-at-a-time alternative is ~hundreds of
+/// syscalls per connection, which collapses the accept path when the
+/// loadgen opens every session inside a ~1 s burst.
 fn read_head(stream: &mut TcpStream) -> io::Result<String> {
-    let mut buf = Vec::with_capacity(512);
-    let mut byte = [0u8; 1];
+    let mut buf = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 1024];
     loop {
-        let n = stream.read(&mut byte)?;
+        let n = stream.read(&mut chunk)?;
         if n == 0 {
             return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
         }
-        buf.push(byte[0]);
-        if buf.ends_with(b"\r\n\r\n") {
-            buf.truncate(buf.len() - 4);
+        buf.extend_from_slice(&chunk[..n]);
+        if let Some(end) = find_double_crlf(&buf) {
+            buf.truncate(end);
             break;
         }
         if buf.len() > MAX_HEADER_BYTES {
@@ -104,4 +106,8 @@ fn read_head(stream: &mut TcpStream) -> io::Result<String> {
         }
     }
     String::from_utf8(buf).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))
+}
+
+fn find_double_crlf(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|w| w == b"\r\n\r\n")
 }
