@@ -6,6 +6,11 @@
 /results/*
 !/results/.gitkeep
 
+# Agent scratch (worktrees, plans, local settings) is not tracked; the
+# add-runtime skill is the only intentionally committed .claude/ content.
+/.claude/*
+!/.claude/skills/
+
 /.venv/
 /analysis/.venv/
 /services/python-fastapi/.venv/

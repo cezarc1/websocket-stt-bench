@@ -16,6 +16,10 @@ The deterministic STT stub (FNV-1a checksum, RMS, zero crossings, plus a transcr
 
 `AGENTS.md` is the canonical contributor guide; this file covers architecture decisions and gotchas that aren't obvious from the tree.
 
+## Adding a new runtime/language
+
+Adding (or re-measuring) a gateway is a codified, reproducible procedure — do not improvise it. Follow **`docs/RUNTIME_PLAYBOOK.md`** (the agent-executable program: plan → implement to the black-box protocol → `just conformance` → `/simplify` → CI image → cluster deploy → 1-vCPU then 2-vCPU divide-and-conquer ceiling → succinct README + regenerated graph → PR), or invoke the **`add-runtime`** skill (`.claude/skills/add-runtime/`). Capacity sweeps use the tracked harness `scripts/bench/{run_point,ladder,eval_slo}` — the comparability contract (pod shape, timings, SLO gates, confirmed-vs-borderline bracketing) is fixed there and must not be tuned per-runtime. Agents stay autonomous except at the playbook's `[ASK]` gates (plan approval, protocol ambiguity, push/CI/cluster/PR). The Agent Build Log (autonomy/debuggability) is a required deliverable, co-equal with perf/LOC.
+
 ## Shared protocol contract
 
 Every service must implement identical behavior at `/ws/stt`:
