@@ -327,6 +327,38 @@ gateways:
       limits:
         cpu: "2"
         memory: 2Gi
+  ocamlWebsocketAsync:
+    enabled: true
+    name: stt-ocaml-websocket-async-gateway
+    image: ocaml-websocket-async
+    replicas: 0
+    port: 9100
+    env:
+      WORKER_THREADS: "1"
+      INFERENCE_HTTP_CLIENTS: "4"
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+  ocamlWebsocketAsync2cpu:
+    enabled: true
+    name: stt-ocaml-websocket-async-2vcpu-gateway
+    image: ocaml-websocket-async
+    replicas: 0
+    port: 9100
+    env:
+      WORKER_THREADS: "2"
+      INFERENCE_HTTP_CLIENTS: "4"
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
 
 loadgen:
   enabled: true

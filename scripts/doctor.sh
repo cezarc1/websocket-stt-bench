@@ -113,6 +113,7 @@ expect_version "$BAZELISK_ACTUAL" "$BAZELISK_EXPECTED" "bazelisk"
 # switch-creation step is too expensive to require on every `just check`.
 OPAM_EXPECTED="$(version_value ocaml opam)"
 OXCAML_SWITCH_EXPECTED="$(version_value ocaml oxcaml_switch)"
+OCAML_STOCK_SWITCH_EXPECTED="${OCAML_STOCK_SWITCH:-$(version_value ocaml_stock opam_switch)}"
 OPAM_BIN="$ROOT/.tools/bin/opam"
 if [ ! -x "$OPAM_BIN" ]; then
   echo "opam: missing $OPAM_BIN; run: just ensure-opam" >&2
@@ -124,6 +125,9 @@ expect_version "$("$OPAM_BIN" --version | head -n1)" "$OPAM_EXPECTED" "opam"
 # so first-time contributors learn what to run without blocking other checks.
 if ! "$OPAM_BIN" switch list --short 2>/dev/null | grep -qx "$OXCAML_SWITCH_EXPECTED"; then
   echo "doctor note: OxCaml switch $OXCAML_SWITCH_EXPECTED not yet created; run: just ensure-oxcaml-switch" >&2
+fi
+if ! "$OPAM_BIN" switch list --short 2>/dev/null | grep -qx "$OCAML_STOCK_SWITCH_EXPECTED"; then
+  echo "doctor note: stock OCaml switch $OCAML_STOCK_SWITCH_EXPECTED not yet created; run: just ensure-stock-ocaml-switch" >&2
 fi
 
 docker version --format '{{.Client.Version}}' >/dev/null

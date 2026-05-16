@@ -199,3 +199,26 @@ alcotest = "1.8.0"
 # `docker pull ocaml/opam:debian-12-ocaml-5.2 && docker inspect --format='{{index .RepoDigests 0}}' ...`).
 opam_debian_12 = "ocaml/opam:debian-12-ocaml-5.2"
 debian_slim = "debian:12-slim"
+
+[ocaml_stock]
+# Stock upstream OCaml comparison point for the OxCaml gateway. The local
+# recipes create/use this opam switch unless OCAML_STOCK_SWITCH overrides it
+# (useful when a machine already has a stock 5.4.1 "default" switch).
+version = "5.4.1"
+opam_switch = "5.4.1"
+
+[ocaml_stock.dependencies]
+ocamlformat = "0.29.0"
+dune = "latest"
+core = "latest"
+core_unix = "latest"
+async = "latest"
+cohttp_async = "latest"
+websocket_async = "latest"
+yojson = "latest"
+ppx_jane = "latest"
+alcotest = "latest"
+
+[containers.ocaml_stock]
+opam_debian_12 = "ocaml/opam:debian-12-ocaml-5.4"
+debian_slim = "debian:12-slim"
