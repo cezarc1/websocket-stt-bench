@@ -214,8 +214,18 @@ let start (config : Config.t) =
   Log.Global.info "stt-ocaml-oxcaml starting: %s" (Config.to_string_hum config);
   let where_to_listen = Tcp.Where_to_listen.of_port config.port in
   let%bind _server =
-    Tcp.Server.create ~on_handler_error:`Ignore where_to_listen (fun addr reader writer ->
-      serve ~config ~inference addr reader writer)
+    (* Capacity tuning for the connection-burst at session ramp-up. Async defaults
+       ([backlog=64], [max_accepts_per_batch=1]) stall the accept rate under
+       hundreds/thousands of near-simultaneous client connects, surfacing as loadgen
+       "connect" errors. This is the OCaml analogue of the per-gateway transport tuning
+       the README documents (e.g. Rust INFERENCE_HTTP_CLIENTS). [max_connections] defaults
+       to ~10k which is well above any 1-vCPU session count. *)
+    Tcp.Server.create
+      ~backlog:8192
+      ~max_accepts_per_batch:64
+      ~on_handler_error:`Ignore
+      where_to_listen
+      (fun addr reader writer -> serve ~config ~inference addr reader writer)
   in
   Deferred.never ()
 ;;
