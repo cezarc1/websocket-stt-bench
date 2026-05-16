@@ -104,8 +104,9 @@ if [ ! -x "$BAZEL_BIN" ]; then
   echo "bazelisk: missing $BAZEL_BIN; run: just ensure-bazelisk" >&2
   exit 1
 fi
-# bazelisk reports as "Bazelisk version: 1.29.0" (or "v1.29.0" on some releases).
-BAZELISK_ACTUAL="$("$BAZEL_BIN" --version 2>/dev/null | awk '/^Bazelisk version:/ { print $3 }' | sed 's/^v//')"
+# Bazelisk 1.29 reports the resolved Bazel version from `--version`; the
+# launcher version itself is in `bazel version` as "Bazelisk version: v1.29.0".
+BAZELISK_ACTUAL="$("$BAZEL_BIN" version 2>/dev/null | awk '/^Bazelisk version:/ { print $3 }' | sed 's/^v//')"
 expect_version "$BAZELISK_ACTUAL" "$BAZELISK_EXPECTED" "bazelisk"
 
 # OCaml / OxCaml: the switch is created lazily by `just ensure-oxcaml-switch`.

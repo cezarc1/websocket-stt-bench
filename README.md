@@ -12,6 +12,7 @@ We bench:
 - Java 25 LTS (Helidon Níma virtual threads)
 - Scala 3.3 LTS (Pekko actors on the JVM)
 - OCaml on Jane Street's [OxCaml 5.2.0+ox](https://oxcaml.org/) — 2075 sessions/vCPU (Go/Bun tier; up from 1050 after removing the per-flush inference connect and the per-frame copies — see [How the code turned out](#how-the-code-turned-out)). The inflight invariant is modeled as an opaque, mint-once capability type rather than a raw boolean (runtime-enforced by an `Mvar`; an honest attempt at `@ unique` compile-time enforcement hit Async's un-mode-annotated APIs).
+- Stock OCaml 5.4.1 on the normal Async ecosystem stack (`cohttp-async` + `websocket-async`) — 1212 sessions/vCPU. This is the practical upstream-OCaml/library baseline; it is not a compiler-only A/B against OxCaml because the transport stack is different too.
 
 This benchmark tries to emulate a realistic-ish, near-realtime, speech-to-text "streaming" workload, including the protocol.
 
@@ -32,9 +33,10 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 | **[Java 25 LTS](https://openjdk.org/projects/jdk/25/) + [Helidon Níma 4.3](https://helidon.io/) (vthreads, JEP 491)** | 917 | 2600‡ | 3750 (1.44X) | latency, then heap/OOM cliff |
 | **[TypeScript](https://www.typescriptlang.org/) on [Bun 1.3.13](https://bun.sh/)** | 734 | 2550‡ | n/a | memory/error cliff; fetch caveat |
 | **[Go 1.26.3](https://go.dev/) + `net/http` / [`coder/websocket`](https://github.com/coder/websocket)** | 893 | 2500‡ | 4000 (1.60X) | CPU/latency |
-| **[OxCaml 5.2.0+ox](https://oxcaml.org/) (Async, single-domain; hand-rolled RFC 6455 + raw HTTP/1.1 keep-alive)** | 1235 | 2075 | ~2125§ | CPU (single Async domain) |
+| **[OxCaml 5.2.0+ox](https://oxcaml.org/) (Async, single-domain; hand-rolled RFC 6455 + raw HTTP/1.1 keep-alive)** | 1235 | 2075 | 3350§ (replicas) | CPU (single Async domain) |
 | **[Scala 3.3 LTS](https://www.scala-lang.org/) + [Apache Pekko 1.6](https://pekko.apache.org/) (actor model, JVM)** | 726 | 1400 | 2200 (1.57X) | connect timeouts, TODO: investigate this, surprising. |
 | **[Elixir 1.19.5](https://github.com/elixir-lang/elixir) + [Phoenix](https://github.com/phoenixframework/phoenix) / [Bandit](https://github.com/mtrudel/bandit)** | 784 | 1250 | 2250 (1.80X) | CPU |
+| **OCaml 5.4.1 + Async / `cohttp-async` / `websocket-async`** | 882 | 1212 | 2225¶ (replicas) | CPU (library stack + single Async domain) |
 | **[CPython 3.14.4](https://github.com/python/cpython) ([uvloop](https://github.com/MagicStack/uvloop) + [FastAPI](https://github.com/fastapi/fastapi), [granian](https://github.com/emmett-framework/granian))** | 678 | 1100 | 1750 (1.59X)† | CPU |
 | **[CPython 3.14.4t](https://github.com/python/cpython) (GIL-free, [uvloop](https://github.com/MagicStack/uvloop) + [FastAPI](https://github.com/fastapi/fastapi), [granian](https://github.com/emmett-framework/granian)) (`mt`)** | 678 | 180 | 205 (1.14X) | send/close timeout reliability? (TODO: investigate) |
 
@@ -44,6 +46,8 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 ‡ 1 vCPU / 2 GiB memory. The 1 GiB shape also OOMs near the edge, so the bumped 2 GiB shape is the reported bracket.
 
 § OxCaml runs a single Async domain. Measured both ways (2026-05-16): a 2-vCPU pod ≈ 1-vCPU (~2125, second core idle); two 1-vCPU replicas bracket **3350 / 1.61X, zero errors** — replica fan-out is the only real 2-vCPU lever. `janestreet/parallel` can't change this — its `parallel` needs an `@ once portable` closure and Async sockets are domain-pinned, so an I/O session provably can't cross domains. Detail in the [sweep section](#detailed-sweep-points).
+
+¶ Stock OCaml uses upstream OCaml 5.4.1 and the normal Async library path. Measured both ways (2026-05-16): a 2-vCPU pod only reached **1250** (the single Async domain stays the wall); two 1-vCPU replicas reached **2225 / 1.84X, zero errors**. This is a practical ecosystem-stack comparison, not a pure OxCaml compiler delta.
 
 The above numbers are the highest concurrent sessions that passed the SLO at n vCPU. Example: C++ 1-vCPU ceiling is bracketed between 4450 (passes) and 4475 (first fail).
 
@@ -64,9 +68,9 @@ _Note: this is a i/o bound workload. Every 1000 ms flush triggers fake CPU work 
 
 - **Either Elixir disappoints per vCPU, and/or Python punches way above its weight.** At 1 vCPU Elixir leads CPython 3.14 (uvloop + FastAPI) by only 14% and trails Bun by ~2×. Single-loop async on a fast event loop is a stronger baseline than the BEAM-vs-Python folklore suggests, and the BEAM advantage doesn't really show up until you scale up the pod. Honestly, I have been just absolutely dissapointed by Elixir and the legendary Erlang VM. I am hoping that there is something wrong with the code here as this is just not acceptable to be within 15% of Python!
 
-- **Rust isn't more verbose than its managed-runtime peers.** Raw production LOC: Python 678, Rust 696, TypeScript/Bun 734, Elixir 784, Go 893, Java 917, OCaml/OxCaml 1235, C++ 1551. C++ is the outlier on size; the rest stay in the same band. The "Rust = verbose" intuition doesn't survive a one-protocol head-to-head; details in "How the code turned out" below.
+- **Rust isn't more verbose than its managed-runtime peers.** Raw production LOC: Python 678, Rust 696, TypeScript/Bun 734, Elixir 784, stock OCaml 882, Go 893, Java 917, OCaml/OxCaml 1235, C++ 1551. C++ is the outlier on size; the rest stay in the same band. The "Rust = verbose" intuition doesn't survive a one-protocol head-to-head; details in "How the code turned out" below.
 
-- **A hand-rolled OCaml stack lands surprisingly close to Java.** Java is the top GC'd runtime here (2600). OxCaml reaches **2075 (≈0.8× Java)** — and it does so with *no mature WebSocket library*: raw `Async.Tcp`, a hand-written RFC 6455 framer + SHA-1 + base64, a single event domain, where Java/Bun/Go all lean on mature optimized stacks. That a from-scratch transport gets within 20% of Helidon Níma is the surprise. The ceiling was transport plumbing, not the compiler: the first build hit 1050 (a fresh TCP connect to inference on *every* flush saturated the one Async domain on connection churn, zero errors to the cliff); a persistent keep-alive connection + a zero-copy frame path moved the confirmed ceiling **1050 → 1750 → 2075**, and a later JSON micro-opt plus a full cleanup round were both *measured no-ops* on the wall — the residual limit is raw single-Async-domain CPU. 2-vCPU is replica-only (single domain — see § and the [sweep section](#detailed-sweep-points)). **TODO:** a stock-OCaml-5 (non-OxCaml) variant would isolate how much of this is the runtime vs. the OxCaml compiler/mode system — worth running.
+- **A hand-rolled OCaml stack lands surprisingly close to Java.** Java is the top GC'd runtime here (2600). OxCaml reaches **2075 (≈0.8× Java)** — and it does so with *no mature WebSocket library*: raw `Async.Tcp`, a hand-written RFC 6455 framer + SHA-1 + base64, a single event domain, where Java/Bun/Go all lean on mature optimized stacks. That a from-scratch transport gets within 20% of Helidon Níma is the surprise. The ceiling was transport plumbing: the first build hit 1050 (a fresh TCP connect to inference on *every* flush saturated the one Async domain on connection churn, zero errors to the cliff); a persistent keep-alive connection + a zero-copy frame path moved the confirmed ceiling **1050 → 1750 → 2075**, and a later JSON micro-opt plus a full cleanup round were both *measured no-ops* on the wall — the residual limit is raw single-Async-domain CPU. The new stock-OCaml library-stack baseline lands at **1212**, so OxCaml + the hand-rolled transport is **1.71X** faster at 1 vCPU, but this is not a pure compiler comparison: compiler, version, and transport stack all changed. 2-vCPU is replica-only for both OCaml variants (single domain — see § / ¶ and the [sweep section](#detailed-sweep-points)).
 
 **Pareto-optimal:** Python (678 LOC / 1100 sess, leanest) · Rust (696 LOC / 3475 sess, best balance) · C++23 (1551 LOC / 4450 sess, most capacity). Everyone else is dominated on both axes.
 
@@ -84,6 +88,7 @@ Sessions per vCPU is the inverse of cloud cost per session, so the TL;DR ranking
 | OxCaml 5.2.0+ox (Async, single-domain) | **2.1×** — keep-alive + zero-copy tuned; single-domain CPU wall |
 | Scala/Pekko | **3.2×** |
 | Elixir | **3.6×** (narrows at 2 vCPU) |
+| Stock OCaml 5.4.1 (Async library stack) | **3.7×** — simpler ecosystem path, lower ceiling |
 | CPython 3.14 (uvloop + FastAPI) | **4.0×** |
 | CPython 3.14.4t free-threaded `mt` | **25×** — reliability-limited, see [Issues](#issues) |
 
@@ -97,7 +102,7 @@ At equal session counts, Rust costs ~1.3× more vCPUs than C++ in this run; Java
 
 ## What this experiment measures
 
-> **tl;dr.** Seven gateway implementations share one WebSocket protocol — C++23 / uWebSockets, Rust 1.95 / Tokio (Axum), Java 25 / Helidon Níma virtual threads, Go 1.26.3 / `net/http` (`coder/websocket`), TypeScript on Bun 1.3.13 (`Bun.serve` + Bun `fetch`), Elixir 1.19.5 / BEAM (Phoenix + Bandit on raw `WebSock`), and CPython 3.14 in two flavors (with GIL, free-threaded `t`) on uvloop + FastAPI / Granian — all behind a shared Rust inference endpoint. Inference is a deterministic Rust simulator with realistic GPU-style latency (log-normal jitter + batch wait + long-tail spikes), not a real ASR model. Tail behavior against a real CUDA-bound ASR may shift absolute numbers; the runtime ranking should not.
+> **tl;dr.** The gateway implementations share one WebSocket protocol — C++23 / uWebSockets, Rust 1.95 / Tokio (Axum), Java 25 / Helidon Níma virtual threads, Go 1.26.3 / `net/http` (`coder/websocket`), TypeScript on Bun 1.3.13 (`Bun.serve` + Bun `fetch`), Elixir 1.19.5 / BEAM (Phoenix + Bandit on raw `WebSock`), Scala 3.3 / Pekko, OCaml in two Async variants (OxCaml + raw transport, stock OCaml + ecosystem WebSocket stack), and CPython 3.14 in two flavors (with GIL, free-threaded `t`) on uvloop + FastAPI / Granian — all behind a shared Rust inference endpoint. Inference is a deterministic Rust simulator with realistic GPU-style latency (log-normal jitter + batch wait + long-tail spikes), not a real ASR model. Tail behavior against a real CUDA-bound ASR may shift absolute numbers; the runtime ranking should not.
 
 Clients emit 16 kHz mono PCM at **20 ms / 640-byte** frames (that's 50 fps per session).
 
@@ -155,12 +160,13 @@ Error budget tolerates the kernel/TCP-stall noise floor (~10⁻⁶) while stayin
 | **Rust** | 696 | 6 | Explicit `Arc<Semaphore>::new(1)` invariant; zero-copy `BytesMut` batching |
 | **TypeScript/Bun** | 734 | 6 | Bun-native `Bun.serve()`; Valibot boundary validation; bounded outbox tracks Bun send backpressure |
 | **Elixir** | 784 | 13 | Process-per-connection + supervision; per-message protocol modules inflate file count |
+| **Stock OCaml/Async** | 882 | 17 | Upstream OCaml 5.4.1; `cohttp-async` + `websocket-async`; structural one-inflight flush loop |
 | **Go** | 893 | 6 | `net/http` + `coder/websocket`; h2c inference transport; unit-testable session core |
 | **Java** | 917 | 16 | Java 25 instance main; Helidon Níma virtual threads; sealed outbound messages |
 | **OCaml/OxCaml** | 1235 | 21 | Inflight invariant is an opaque `Inflight_capability.t` (mint-once → `consume` → re-mint from `Token`), runtime-enforced by an `Async.Mvar`. Raw `Async.Tcp` transport with hand-rolled RFC 6455 framing + SHA-1 + base64 (the `websocket-async`/`cohttp-async` stack pulled in `digestif`, which doesn't compile on the OxCaml 5.2.0+ox switch invariant). `.ml`+`.mli` pairs inflate the file count. |
 | **C++23** | 1551 | 11 | uWebSockets loop-per-thread; system libcurl HTTP/2 transport; Glaze JSON |
 
-The managed-runtime implementations plus Rust are in the same size band. C++ buys the highest measured per-vCPU capacity here, but it is also the largest implementation. Sources: `services/cpp23-uwebsockets/src/`, `services/rust-axum/src/`, `services/java-helidon-nima/src/main/java/`, `services/go-nethttp/`, `services/typescript-bun/src/`, `services/elixir-phoenix/lib/`, `services/python-fastapi/app/`.
+The managed-runtime implementations plus Rust are in the same size band. C++ buys the highest measured per-vCPU capacity here, but it is also the largest implementation. Sources: `services/cpp23-uwebsockets/src/`, `services/rust-axum/src/`, `services/java-helidon-nima/src/main/java/`, `services/go-nethttp/`, `services/typescript-bun/src/`, `services/elixir-phoenix/lib/`, `services/python-fastapi/app/`, `services/ocaml-websocket-async/`, `services/ocaml-oxcaml/`.
 
 - **C++23 — uWebSockets + libcurl multi, 1551 raw LOC.** Uses uWebSockets' loop-per-thread model, Glaze for strict JSON, a bounded per-session buffer, and system libcurl with nghttp2 for gateway-to-inference HTTP/2. The tuned 1-vCPU result depends on `INFERENCE_HTTP_CLIENTS=128`; the earlier BCR curl build did not provide the needed HTTP/2 behavior and hit a much lower cliff.
 - **Rust — Tokio + Axum, 696 raw LOC.** Uses `Arc<Semaphore>::new(1)` for the inflight invariant, `BytesMut` for zero-copy frame batching, and `tokio::select! { biased; }` to drain partials before reading new frames so back-pressure surfaces as oldest-frame latency growth. The borrow checker prevents a frame reference from being held across `.await`, and Serde's `deny_unknown_fields` validates the wire protocol at compile time. Rough edges: `Mutex.lock().expect("...")` panics on poisoning (`session.rs:116`), there are no gateway-local tests, and runtime version constants are manually kept in sync with `Cargo.toml`.
@@ -169,9 +175,10 @@ The managed-runtime implementations plus Rust are in the same size band. C++ buy
 - **TypeScript/Bun — `Bun.serve()` + Bun `fetch`, 734 raw LOC.** Uses Valibot `strictObject` schemas at the WebSocket and inference boundaries, a private `inflight` promise for the one-batch invariant, and a bounded four-slot outbox that treats Bun `send()` backpressure as occupied capacity instead of handing unbounded strings to the runtime. Rough edge: Bun `fetch` is the honest Bun-native client, but it is not the same explicit h2c transport shape as Rust's `reqwest` path.
 - **Elixir — Phoenix 1.8 + Bandit on raw `WebSock`, 784 raw LOC.** Channels would force binary frames through a JSON-base64 wrapper at 50 fps, so the service uses `WebSockAdapter.upgrade/4` directly. Pattern matching at the function head enforces the protocol — text-only for `start`, binary-only after, strict 640-byte frames — turning schema violations into WebSocket close codes 1002/1003 by construction (`stt_web_socket.ex:39-71`). Process-per-connection means one connection's crash doesn't affect others, supervision is real, and the `busy?` inflight flag is scannable in one spot. Rough edge: less observability instrumentation than production needs — no per-connection metrics or buffer-depth histograms.
 - **Python — uvloop + FastAPI on Granian, 678 raw LOC.** Boundary safety is Pydantic with `extra="forbid"` plus `ty` static type-checking. The flush loop and writer loop are decoupled into two long-running tasks (`session.py:61-63`), keeping inference time independent of WebSocket send time. Two CPython builds share one codebase via a startup runtime assertion (`runtime.py`): GIL-on with uvloop, and free-threaded `t` with `Py_GIL_DISABLED=1`. Rough edge: the inflight invariant is a runtime walrus-guarded check (`session.py:96`), not a type-enforced primitive — easier to break during refactoring than Rust's semaphore or Elixir's flag.
+- **Stock OCaml 5.4.1 — Async + `cohttp-async` + `websocket-async`, 882 raw LOC.** This is the canonical upstream-OCaml ecosystem path we wanted as a comparison: no OxCaml mode system, no custom SHA-1/base64/framer, and a smaller codebase. The trade-off is throughput: **1212** confirmed at 1 vCPU versus **2075** for OxCaml + raw transport. The one-inflight invariant is structural here: the flush loop awaits the inference request before taking the next batch, so there is no separate semaphore/Mvar. `WORKER_THREADS` and `INFERENCE_HTTP_CLIENTS` are accepted for env-contract parity but are no-ops in this single-domain implementation.
 - **OCaml/OxCaml — Async + raw `Tcp.Server`/`Tcp.connect` + hand-rolled RFC 6455, 1235 raw LOC.** Jane Street's experimental fork ([oxcaml.org](https://oxcaml.org/)) adds a mode system (`portable`/`sync`/`unique`) to OCaml 5.2. The goal was to make the inflight invariant `Inflight_capability.t @ unique` so a double-fire is a *compile error* — but the capability must cross `Async`'s `Mvar`/`Deferred` boundary and stock Async isn't mode-annotated (`Mvar.take_now` returns `aliased`), so `@ unique` doesn't survive the round-trip. Shipped instead: `Inflight_capability.t` is an opaque mint-once type (`create_for_session` → `consume` → `Token.t` → `of_token`); the discipline is explicit in the API shape but the runtime guarantee is still the per-session `Async.Mvar`. Honest read: same *category* as the other gateways' runtime guards, expressed through the type system rather than a flag — not the stronger compile-time proof. Rough edges: (1) the transport is hand-rolled — `websocket-async`/`cohttp-async` pull `digestif`, which doesn't compile on OxCaml 5.2.0+ox, so the gateway carries its own RFC 6455 framer + SHA-1 + base64; (2) inference is HTTP/1.1 over raw `Async.Tcp`, persistent keep-alive, one connection per session (the one-inflight invariant makes that both correct and optimal). The first build (fresh connect per flush) was the ceiling at 1050; keep-alive + a zero-copy frame path moved the confirmed ceiling **1050 → 1750 → 2075**, then a direct-buffer JSON serializer and a later cleanup round (epoch-fenced timeout fix + `Error_*` sum types + a `Websocket_*`/`Http1` module split + a silent-server regression test) were both *measured no-ops* on the wall — it's raw single-Async-domain CPU. 2-vCPU was settled empirically: a 2-vCPU pod ≈ 1-vCPU (single domain), `janestreet/parallel` is provably inapplicable (its `parallel` takes `f @ once portable` / `value mod contended`; Async sockets are domain-pinned), so the 2-vCPU answer is replica fan-out (3350 / 1.61X) and `WORKER_THREADS` stays an honest documented no-op. Full bracket in the [sweep section](#detailed-sweep-points).
 
-**One in-flight inference per connection** is the load-bearing protocol invariant — a boolean guard in C++, `Semaphore::new(1)` in Rust, an `AtomicBoolean` guard in Java, a single-token channel in Go, `inflight: Promise<void> | null` in TypeScript/Bun, `busy?: bool` in Elixir, `inflight: Task | None` in Python, and an opaque mint-once capability + `Mvar` in OCaml/OxCaml. Every entry enforces it at runtime; OxCaml expresses it through an opaque capability type rather than a raw flag, which makes the discipline harder to break by accident during refactoring, but the enforcement is still the `Mvar`, not the compiler. This is what makes saturation surface as growing oldest-frame latency instead of unbounded task spawning. If you take one thing from this comparison into your own gateway, take this.
+**One in-flight inference per connection** is the load-bearing protocol invariant — a boolean guard in C++, `Semaphore::new(1)` in Rust, an `AtomicBoolean` guard in Java, a single-token channel in Go, `inflight: Promise<void> | null` in TypeScript/Bun, `busy?: bool` in Elixir, `inflight: Task | None` in Python, a sequential flush loop in stock OCaml, and an opaque mint-once capability + `Mvar` in OCaml/OxCaml. Every entry enforces it at runtime; OxCaml expresses it through an opaque capability type rather than a raw flag, which makes the discipline harder to break by accident during refactoring, but the enforcement is still the `Mvar`, not the compiler. This is what makes saturation surface as growing oldest-frame latency instead of unbounded task spawning. If you take one thing from this comparison into your own gateway, take this.
 
 ## How to deploy each
 
@@ -187,6 +194,7 @@ The managed-runtime implementations plus Rust are in the same size band. C++ buy
 | Multi-core scale-up in one pod | Elixir | 1.80× lift 1→2 vCPU (vs. Rust's 1.22×) — the cleanest vertical scaling result |
 | Best fit for agentic coding | Python or Rust | Python is most in-domain for frontier coding models; Rust is the most LLM-verifiable (compiler + borrow checker catch model mistakes early). TODO: bench OCaml / Haskell — also highly verifiable, but in-domain coverage unknown |
 | Modeling invariants as types (not flags) | OCaml/OxCaml | Inflight invariant is an opaque mint-once capability rather than a boolean — harder to break during refactoring (still runtime-enforced by an `Mvar`, not the compiler; the `@ unique` compile-time path is blocked by Async not being mode-annotated). Trade-off: experimental compiler ("Jane Street's production compiler … not really meant for other people to use as their production compiler [outside Jane Street]") and a thinner ecosystem than Rust/Go |
+| Upstream OCaml library baseline | Stock OCaml/Async | Simpler and smaller than the OxCaml raw-transport build, but the library stack lands near Elixir/Python, not the Go/Bun tier |
 | Free-threaded Python | **wait** | The `mt` combo is reliability-limited today — see [Issues](#issues) |
 
 ### Pod shape
@@ -199,6 +207,7 @@ The managed-runtime implementations plus Rust are in the same size band. C++ buy
 - **Elixir** — 2-vCPU pods, ≥2 GiB RAM (1 GiB OOMs at the 1-vCPU edge before CPU saturates). The one runtime where fattening the pod beats adding replicas.
 - **Python (uvloop + FastAPI)** — 1-vCPU pods × N replicas. Each Granian worker is one asyncio loop; fattening the pod requires more processes.
 - **OCaml/OxCaml** — 1-vCPU / 2 GiB pods × N replicas; **scale by replicas, not by fattening the pod.** A 2-vCPU pod ≈ 1-vCPU (~2125, single Async domain); 2× 1-vCPU replicas ≈ 3350 (1.61X). `janestreet/parallel` can't lift it (Async sockets are domain-pinned).
+- **Stock OCaml/Async** — 1-vCPU / 2 GiB pods × N replicas; **scale by replicas, not by fattening the pod.** A 2-vCPU pod only confirmed 1250; 2× 1-vCPU replicas confirmed 2225 (1.84X). `WORKER_THREADS` is a no-op here because the gateway remains one Async domain.
 - **Inference** — provision separately with structural CPU headroom. Co-locating turns gateway capacity into inference capacity (Rust 2-vCPU went from "fails at 1800" co-located to "passes 4375" with dedicated inference pods).
 
 ## Reproducing the numbers
@@ -230,7 +239,7 @@ helm template stt-bench charts/stt-bench \
 - **Load generator**: `loadgen/rust/` — `tokio-tungstenite` + HDR histograms, records `(now - sent_time)` per partial (open-loop, coordinated-omission-correct), validates every `partial` against the strict schema.
 - **k3s node**: Intel Core i9-13900F · 32 logical CPUs / 64 GiB RAM · Ubuntu 24.04.3 · k3s v1.35.4. This is a hybrid x86-64 desktop CPU: 8 performance cores with hyper-threading plus 16 efficiency cores, for 24 physical cores / 32 logical CPUs. Kubernetes CPU requests/limits here are CFS quota, not CPU affinity; unless you enable static CPU Manager / cpuset pinning, a "1 vCPU" pod gets one CPU's worth of time on a heterogeneous node and can migrate between P/E cores. That makes the exact edge point node-specific, especially near the SLO cliff. Treat the persisted `*.samples.csv` artifacts and repeat runs as the evidence; expect uniform cloud nodes such as EKS instances to have less core-class variance.
 - **Pinned runtimes** (`versions.lock.toml`): C++23 / Clang 21.1.8 / uWebSockets 20.77, Rust 1.95 (edition 2024), Go 1.26.3, Bun 1.3.13 + TypeScript 6.0.3, Elixir 1.19.5 / OTP, **CPython 3.14** (GIL on, used by `python-fastapi-stock-gil-*`) and **CPython 3.14.4t** (free-threaded, `Py_GIL_DISABLED=1` enforced at startup, used by `python-fastapi-mt-*` and `python-fastapi-stock-*`).
-- **Run dates**: fresh k3s 1-vCPU and 2-vCPU runs on 2026-05-09 / 2026-05-10; TypeScript/Bun 1-vCPU / 2 GiB and Go 1-vCPU / 2-vCPU / 2 GiB sweeps on 2026-05-11; C++23/uWebSockets 1-vCPU sweep on 2026-05-13; OxCaml 5.2.0+ox 1-vCPU / 2 GiB sweeps on 2026-05-16 — first build (fresh-connect-per-flush) bracketed 1050, then keep-alive + zero-copy tuning re-swept to the confirmed 2075; a same-day post-cleanup re-sweep reproduced the identical 2075↔2125 edge, and the OxCaml 2-vCPU question was settled empirically (one 2-vCPU pod ≈2125 / no second-core lift; two 1-vCPU replicas 3350 / 1.61X) (10 s warmup / 45 s measured / 30 s ramp / 1000 ms session-start spread, in-cluster loadgen Job vs the shared 4×6-CPU inference deployment).
+- **Run dates**: fresh k3s 1-vCPU and 2-vCPU runs on 2026-05-09 / 2026-05-10; TypeScript/Bun 1-vCPU / 2 GiB and Go 1-vCPU / 2-vCPU / 2 GiB sweeps on 2026-05-11; C++23/uWebSockets 1-vCPU sweep on 2026-05-13; OxCaml 5.2.0+ox 1-vCPU / 2 GiB sweeps on 2026-05-16 — first build (fresh-connect-per-flush) bracketed 1050, then keep-alive + zero-copy tuning re-swept to the confirmed 2075; a same-day post-cleanup re-sweep reproduced the identical 2075↔2125 edge, and the OxCaml 2-vCPU question was settled empirically (one 2-vCPU pod ≈2125 / no second-core lift; two 1-vCPU replicas 3350 / 1.61X); stock OCaml 5.4.1 + Async/cohttp/websocket sweeps also ran on 2026-05-16 (1-vCPU 1212 confirmed, one 2-vCPU pod 1250 confirmed, two 1-vCPU replicas 2225 confirmed) (10 s warmup / 45 s measured / 30 s ramp / 1000 ms session-start spread, in-cluster loadgen Job vs the shared 4×6-CPU inference deployment).
 
 ## Detailed sweep points
 
@@ -414,6 +423,39 @@ The `2600` point failed the balanced realtime SLO on newest p95, oldest p95, and
 | 210 | fail, 3 send timeouts | 102 / 132 ms | 1082 / 1113 ms | 0.4 / 1.0 ms |
 | 215 | fail, 1 send + 1 close timeout | 98 / 127 ms | 1079 / 1108 ms | 0.4 / 1.0 ms |
 | 225 | fail, 1 send + 1 close timeout | 102 / 133 ms | 1082 / 1114 ms | 0.4 / 1.0 ms |
+
+**Stock OCaml 5.4.1 + Async ecosystem stack (2026-05-16, 1-vCPU / 2 GiB)** — bracketed **1212 (pass, confirmed) ↔ 1225 (borderline: pass once, fail once) ↔ 1237 (first solid fail)**. Uses `cohttp-async` + `websocket-async`; no hand-rolled RFC 6455 path. The failure mode is pure latency until the much higher collapse probes; the edge points have zero protocol/inference/timeout errors.
+
+| Sessions | Result | Newest p50 / p95 | Oldest p50 / p95 | Flush lateness p50 / p95 |
+|---:|---|---:|---:|---:|
+| 1000 | pass | 105 / 137 ms | 1085 / 1117 ms | 0.16 / 1.14 ms |
+| 1187 | pass | 179 / 209 ms | 1158 / 1195 ms | 1.74 / 3.59 ms |
+| 1212 | pass, confirmed | 189 / 221 ms | 1168 / 1209 ms | 1.79 / 3.74 ms |
+| 1225 | borderline, confirm failed newest p50 | 208 / 243 ms | 1189 / 1229 ms | 1.86 / 3.72 ms |
+| 1237 | fail, newest p50 (confirmed) | 209 / 242 ms | 1189 / 1227 ms | 1.85 / 3.66 ms |
+| 1500 | fail, collapse + 4.2 % errors | 4424 / 6046 ms | 5296 / 6984 ms | 2.08 / 3.73 ms |
+
+**Stock OCaml 2-vCPU, measured two ways (2026-05-16).** *Variant A — one 2-vCPU pod, single Async domain:*
+
+| Sessions | Result | Newest p50 / p95 | Oldest p50 / p95 |
+|---:|---|---:|---:|
+| 1212 | pass | 146 / 193 ms | 1127 / 1174 ms |
+| 1250 | pass, confirmed | 184 / 215 ms | 1165 / 1194 ms |
+| 1300 | fail, newest p50 (confirmed) | 218 / 246 ms | 1198 / 1227 ms |
+| 1500 | fail, collapse + 4.1 % errors | 4309 / 6033 ms | 5202 / 6967 ms |
+
+Ceiling **1250 ↔ 1300** — a tiny in-pod lift, not meaningful scale-up. `WORKER_THREADS=2` is a documented no-op in this implementation; the single Async domain remains the wall. *Variant B — two 1-vCPU replicas behind the ClusterIP Service:*
+
+| Sessions | Result | Newest p50 / p95 | Oldest p50 / p95 |
+|---:|---|---:|---:|
+| 2000 | pass | 110 / 145 ms | 1091 / 1123 ms |
+| 2200 | pass | 185 / 227 ms | 1165 / 1207 ms |
+| 2225 | pass, confirmed | 188 / 226 ms | 1168 / 1206 ms |
+| 2237 | borderline, confirm failed newest p50 | 206 / 249 ms | 1187 / 1229 ms |
+| 2250 | fail, newest p50 (confirmed) | 208 / 264 ms | 1189 / 1244 ms |
+| 2400 | fail, latency collapse | 1161 / 3295 ms | 2068 / 4227 ms |
+
+Confirmed **2225 ↔ 2250** — **1.84X** over the single-pod 1212, zero errors at the edge. Replica fan-out is the useful 2-vCPU shape, same as OxCaml, but with a lower absolute ceiling.
 
 **OxCaml 5.2.0+ox 1-vCPU / 2 GiB (tuned: keep-alive + zero-copy)** — bracketed **2075 (pass, confirmed 4× across builds) ↔ 2100 (borderline: 2 pass / 1 fail) ↔ 2125 (first solid fail)**. Artifacts under `results/ocaml-oxcaml-1vcpu-2gib-20260516-tuned/`. The first solid failure is pure latency (newest p50 crosses 200 ms) with **zero** protocol/inference/timeout errors — a clean single-Async-domain CPU edge; the borderline at 2100 reflects the node-class variance the README documents (CFS quota + P/E-core migration on the i9-13900F). Beyond ~2250 the domain collapses hard (2500: p95 ~1.4 s; 3000: ~10 s p95 + 4 % errors). Optimization history (fresh-connect 1050 → keep-alive 1750 → zero-copy 2075; later JSON + cleanup no-ops) is in the [How the code turned out](#how-the-code-turned-out) bullet.
 

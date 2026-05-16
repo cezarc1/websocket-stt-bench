@@ -20,20 +20,21 @@ import matplotlib
 
 matplotlib.use("Agg")
 
-import matplotlib.patheffects as pe  # noqa: E402  (use("Agg") must come first)
-import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.patheffects as pe
+import matplotlib.pyplot as plt
 
 # (name, sessions at 1 vCPU, LOC, label dx_pts, dy_pts, horizontal alignment)
 RUNTIMES: list[tuple[str, int, int, int, int, str]] = [
-    ("C++23 / uWebSockets",        4450, 1551, -10, -14, "right"),
-    ("Rust / Axum",                3475,  696, -10,  10, "right"),
-    ("Java / Helidon Nima",        2600,  917,  10,  10, "left"),
-    ("TypeScript / Bun",           2550,  734,  10, -14, "left"),
-    ("Go / net/http",              2500,  893,  10, -14, "left"),
-    ("OCaml / OxCaml",             2075, 1235,  10,  10, "left"),
-    ("Scala / Pekko",              1400,  726,  10, -14, "left"),
-    ("Elixir / Phoenix",           1250,  784,  10,  10, "left"),
-    ("Python (uvloop + FastAPI)",  1100,  678, -10,  10, "right"),
+    ("C++23 / uWebSockets", 4450, 1551, -10, -14, "right"),
+    ("Rust / Axum", 3475, 696, -10, 10, "right"),
+    ("Java / Helidon Nima", 2600, 917, 10, 10, "left"),
+    ("TypeScript / Bun", 2550, 734, 10, -14, "left"),
+    ("Go / net/http", 2500, 893, 10, -14, "left"),
+    ("OCaml / OxCaml", 2075, 1235, 10, 10, "left"),
+    ("Scala / Pekko", 1400, 726, 10, -14, "left"),
+    ("Elixir / Phoenix", 1250, 784, 10, 10, "left"),
+    ("OCaml / Async libs", 1212, 882, 10, -14, "left"),
+    ("Python (uvloop + FastAPI)", 1100, 678, -10, 10, "right"),
 ]
 
 # Strict Pareto-optimal points: no other runtime has BOTH higher sessions
@@ -53,7 +54,8 @@ def render(out_path: Path) -> None:
     for name, x, y, dx, dy, ha in RUNTIMES:
         is_pareto = name in PARETO
         ax.scatter(
-            [x], [y],
+            [x],
+            [y],
             s=170 if is_pareto else 95,
             alpha=0.92,
             edgecolors="black",
@@ -87,11 +89,15 @@ def render(out_path: Path) -> None:
     ax.set_ylim(600, 1700)
 
     fig.text(
-        0.99, 0.01,
+        0.99,
+        0.01,
         "Yellow markers are Pareto-optimal: no other tested runtime beats them on both axes "
         "(lower LOC AND higher capacity).",
-        ha="right", va="bottom",
-        fontsize=8.5, style="italic", color="#444",
+        ha="right",
+        va="bottom",
+        fontsize=8.5,
+        style="italic",
+        color="#444",
     )
 
     plt.tight_layout(rect=(0, 0.04, 1, 1))
@@ -102,9 +108,7 @@ def render(out_path: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Render the LOC-vs-capacity comparison chart."
-    )
+    parser = argparse.ArgumentParser(description="Render the LOC-vs-capacity comparison chart.")
     parser.add_argument(
         "--out",
         type=Path,
