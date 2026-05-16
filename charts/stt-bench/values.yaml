@@ -1,0 +1,456 @@
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+
+images:
+  registry: ghcr.io
+  # Override `repository` with the GitHub owner publishing the images.
+  # The bundled `images.yml` workflow pushes to
+  # `ghcr.io/${{ github.repository }}/<image>`, so this is typically
+  # `<github-owner>/websocket-stt-bench`.
+  repository: OWNER/websocket-stt-bench
+  tag: main
+  pullPolicy: Always
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+podSecurityContextWithFsGroup:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+results:
+  createPvc: true
+  claimName: stt-benchmark-results
+  size: 10Gi
+  accessModes:
+    - ReadWriteOnce
+
+inference:
+  enabled: true
+  name: stt-inference-server
+  image: inference-server
+  replicas: 1
+  port: 9000
+  env:
+    WORKER_THREADS: "6"
+    CPU_PASSES: "4"
+    MODEL_DELAY_MS: "75"
+    MODEL_MAX_CONCURRENT: "65536"
+  resources:
+    requests:
+      cpu: "6"
+      memory: 2Gi
+    limits:
+      cpu: "6"
+      memory: 2Gi
+  service:
+    type: ClusterIP
+    port: 9000
+    nodePort: null
+    externalTrafficPolicy: null
+  ingress:
+    enabled: false
+    className: traefik
+    host: ""
+    path: /
+
+gatewayCommonEnv:
+  CPU_PASSES: "4"
+  MODEL_DELAY_MS: "75"
+  FLUSH_INTERVAL_MS: "1000"
+  FLUSH_PHASE_JITTER_MS: "1000"
+  INFERENCE_URL: http://stt-inference-server.stt-bench.svc.cluster.local:9000
+
+gateways:
+  rust:
+    enabled: true
+    name: stt-rust-axum-gateway
+    image: rust-axum
+    replicas: 0
+    port: 3000
+    env:
+      WORKER_THREADS: "2"
+      INFERENCE_HTTP_CLIENTS: "512"
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+  goNethttp:
+    enabled: true
+    name: stt-go-nethttp-gateway
+    image: go-nethttp
+    replicas: 0
+    port: 6000
+    env:
+      GOMAXPROCS: "1"
+      INFERENCE_HTTP_CLIENTS: "4"
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+  goNethttp2cpu:
+    enabled: true
+    name: stt-go-nethttp-2vcpu-gateway
+    image: go-nethttp
+    replicas: 0
+    port: 6000
+    env:
+      GOMAXPROCS: "2"
+      INFERENCE_HTTP_CLIENTS: "4"
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+  elixir:
+    enabled: true
+    name: stt-elixir-phoenix-gateway
+    image: elixir-phoenix
+    replicas: 0
+    port: 4000
+    env:
+      WORKER_THREADS: "2"
+      FINCH_POOL_COUNT: "50"
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+  pythonFt:
+    enabled: true
+    name: stt-python-fastapi-ft-gateway
+    image: python-fastapi-ft
+    replicas: 0
+    port: 8000
+    env:
+      WORKER_THREADS: "2"
+      GRANIAN_LOOPS: "2"
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+  pythonGil:
+    enabled: true
+    name: stt-python-fastapi-gil-gateway
+    image: python-fastapi-gil
+    replicas: 0
+    port: 8000
+    env:
+      WORKER_THREADS: "1"
+      PY_VARIANT: gil
+      GRANIAN_LOOP_KIND: uvloop
+      GRANIAN_TASK_IMPL: asyncio
+      GRANIAN_RUNTIME_THREADS: ""
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+  typescriptBun:
+    enabled: true
+    name: stt-typescript-bun-gateway
+    image: typescript-bun
+    replicas: 0
+    port: 7000
+    env:
+      BUN_CONFIG_MAX_HTTP_REQUESTS: "4096"
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+  javaHelidonNima:
+    enabled: true
+    name: stt-java-helidon-nima-gateway
+    image: java-helidon-nima
+    replicas: 0
+    port: 5000
+    env:
+      WORKER_THREADS: "1"
+      INFERENCE_HTTP_CLIENTS: "4"
+      # Production / load-test JVM flags — no tracePinnedThreads (overhead).
+      # JEP 491 (JDK 24) handles the synchronized-pinning case structurally.
+      JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+  javaHelidonNima2cpu:
+    enabled: true
+    name: stt-java-helidon-nima-2vcpu-gateway
+    image: java-helidon-nima
+    replicas: 0
+    port: 5000
+    env:
+      WORKER_THREADS: "2"
+      INFERENCE_HTTP_CLIENTS: "4"
+      JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+  scalaPekko:
+    enabled: true
+    name: stt-scala-pekko-gateway
+    image: scala-pekko
+    replicas: 0
+    port: 2500
+    env:
+      WORKER_THREADS: "1"
+      INFERENCE_HTTP_CLIENTS: "4"
+      JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+  scalaPekko2cpu:
+    enabled: true
+    name: stt-scala-pekko-2vcpu-gateway
+    image: scala-pekko
+    replicas: 0
+    port: 2500
+    env:
+      WORKER_THREADS: "2"
+      INFERENCE_HTTP_CLIENTS: "4"
+      JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+  cpp23UWebsockets:
+    enabled: true
+    name: stt-cpp23-uwebsockets-gateway
+    image: cpp23-uwebsockets
+    replicas: 0
+    port: 1500
+    env:
+      WORKER_THREADS: "1"
+      INFERENCE_HTTP_CLIENTS: "128"
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+  cpp23UWebsockets2cpu:
+    enabled: true
+    name: stt-cpp23-uwebsockets-2vcpu-gateway
+    image: cpp23-uwebsockets
+    replicas: 0
+    port: 1500
+    env:
+      WORKER_THREADS: "2"
+      INFERENCE_HTTP_CLIENTS: "128"
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+
+loadgen:
+  enabled: true
+  image: loadgen
+  ttlSecondsAfterFinished: 86400
+  resources:
+    requests:
+      cpu: "4"
+      memory: 4Gi
+    limits:
+      cpu: "4"
+      memory: 4Gi
+  defaults:
+    warmupSecs: 10
+    measureSecs: 45
+    rampUpSecs: 30
+    sessionStartSpreadMs: 1000
+    repeat: 1
+  runs:
+    - name: rust-3450
+      gateway: rust
+      serviceName: rust-axum-1vcpu-k8s
+      sessions: 3450
+      outputPrefix: rust-axum-1vcpu-3450
+      suspend: true
+    - name: elixir-1250
+      gateway: elixir
+      serviceName: elixir-phoenix-1vcpu-k8s
+      sessions: 1250
+      outputPrefix: elixir-phoenix-1vcpu-1250
+      suspend: true
+    - name: python-ft-180
+      gateway: pythonFt
+      serviceName: python-fastapi-ft-1vcpu-k8s
+      sessions: 180
+      outputPrefix: python-fastapi-ft-1vcpu-180
+      suspend: true
+    - name: python-gil-1100
+      gateway: pythonGil
+      serviceName: python-fastapi-gil-1vcpu-k8s
+      sessions: 1100
+      outputPrefix: python-fastapi-gil-1vcpu-1100
+      suspend: true
+    - name: typescript-bun-2500
+      gateway: typescriptBun
+      serviceName: typescript-bun-1vcpu-2gib-k8s
+      sessions: 2500
+      outputPrefix: typescript-bun-1vcpu-2gib-2500
+      suspend: true
+    - name: typescript-bun-2550
+      gateway: typescriptBun
+      serviceName: typescript-bun-1vcpu-2gib-k8s
+      sessions: 2550
+      outputPrefix: typescript-bun-1vcpu-2gib-2550
+      suspend: true
+    - name: typescript-bun-2600
+      gateway: typescriptBun
+      serviceName: typescript-bun-1vcpu-2gib-k8s
+      sessions: 2600
+      outputPrefix: typescript-bun-1vcpu-2gib-2600
+      suspend: true
+    - name: java-helidon-nima-2600
+      gateway: javaHelidonNima
+      serviceName: java-helidon-nima-1vcpu-2gib-k8s
+      sessions: 2600
+      outputPrefix: java-helidon-nima-1vcpu-2gib-2600
+      suspend: true
+    - name: java-helidon-nima-2625
+      gateway: javaHelidonNima
+      serviceName: java-helidon-nima-1vcpu-2gib-k8s
+      sessions: 2625
+      outputPrefix: java-helidon-nima-1vcpu-2gib-2625
+      suspend: true
+    - name: java-helidon-nima-2vcpu-3750
+      gateway: javaHelidonNima2cpu
+      serviceName: java-helidon-nima-2vcpu-2gib-k8s
+      sessions: 3750
+      outputPrefix: java-helidon-nima-2vcpu-2gib-3750
+      suspend: true
+    - name: java-helidon-nima-2vcpu-3800
+      gateway: javaHelidonNima2cpu
+      serviceName: java-helidon-nima-2vcpu-2gib-k8s
+      sessions: 3800
+      outputPrefix: java-helidon-nima-2vcpu-2gib-3800
+      suspend: true
+    - name: go-nethttp-2500
+      gateway: goNethttp
+      serviceName: go-nethttp-1vcpu-2gib-k8s
+      sessions: 2500
+      outputPrefix: go-nethttp-1vcpu-2gib-2500
+      suspend: true
+    - name: go-nethttp-2600
+      gateway: goNethttp
+      serviceName: go-nethttp-1vcpu-2gib-k8s
+      sessions: 2600
+      outputPrefix: go-nethttp-1vcpu-2gib-2600
+      suspend: true
+    - name: go-nethttp-2vcpu-4000
+      gateway: goNethttp2cpu
+      serviceName: go-nethttp-2vcpu-2gib-k8s
+      sessions: 4000
+      outputPrefix: go-nethttp-2vcpu-2gib-4000
+      suspend: true
+    - name: go-nethttp-2vcpu-4050
+      gateway: goNethttp2cpu
+      serviceName: go-nethttp-2vcpu-2gib-k8s
+      sessions: 4050
+      outputPrefix: go-nethttp-2vcpu-2gib-4050
+      suspend: true
+
+inferbench:
+  enabled: true
+  image: loadgen
+  targetUrl: http://stt-inference-server.stt-bench.svc.cluster.local:9000/infer
+  ttlSecondsAfterFinished: 86400
+  resources:
+    requests:
+      cpu: "4"
+      memory: 4Gi
+    limits:
+      cpu: "4"
+      memory: 4Gi
+  runs:
+    - name: 500rps
+      rps: 500
+      concurrency: 512
+      durationSecs: 60
+      clients: 8
+      payloadFrames: 50
+      timeoutMs: 2000
+      connectTimeoutMs: 1000
+      suspend: true
+    - name: 1000rps
+      rps: 1000
+      concurrency: 1024
+      durationSecs: 60
+      clients: 16
+      payloadFrames: 50
+      timeoutMs: 2000
+      connectTimeoutMs: 1000
+      suspend: true
+    - name: 1800rps
+      rps: 1800
+      concurrency: 2048
+      durationSecs: 60
+      clients: 32
+      payloadFrames: 50
+      timeoutMs: 2000
+      connectTimeoutMs: 1000
+      suspend: true
+    - name: 2200rps
+      rps: 2200
+      concurrency: 3072
+      durationSecs: 60
+      clients: 32
+      payloadFrames: 50
+      timeoutMs: 2000
+      connectTimeoutMs: 1000
+      suspend: true

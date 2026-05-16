@@ -1,0 +1,26 @@
+---
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++20
+ColumnLimit: 120
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AccessModifierOffset: -4
+PointerAlignment: Left
+AlwaysBreakTemplateDeclarations: Yes
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BreakBeforeBraces: Attach
+SpaceBeforeCpp11BracedList: false
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^<[a-z_]+>$'
+    Priority: 1
+  - Regex: '^<.*\.h(pp)?>$'
+    Priority: 2
+  - Regex: '^"stt/.*"$'
+    Priority: 4
+  - Regex: '.*'
+    Priority: 3

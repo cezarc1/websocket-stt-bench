@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>stt</groupId>
+    <artifactId>java-helidon-nima</artifactId>
+    <version>0.1.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.release>25</maven.compiler.release>
+        <mainClass>stt.Main</mainClass>
+
+        <!-- Pinned versions (mirror repo's pinning ethos). -->
+        <helidon.version>4.3.0</helidon.version>
+        <jackson.version>2.18.2</jackson.version>
+        <junit.version>5.11.4</junit.version>
+        <errorprone.version>2.36.0</errorprone.version>
+        <nullaway.version>0.12.2</nullaway.version>
+        <palantir.version>2.90.0</palantir.version>
+        <jspecify.version>1.0.0</jspecify.version>
+
+        <!-- Maven plugin versions. -->
+        <maven.compiler.plugin.version>3.13.0</maven.compiler.plugin.version>
+        <maven.surefire.plugin.version>3.5.2</maven.surefire.plugin.version>
+        <maven.enforcer.plugin.version>3.5.0</maven.enforcer.plugin.version>
+        <maven.shade.plugin.version>3.6.0</maven.shade.plugin.version>
+        <spotless.plugin.version>3.4.0</spotless.plugin.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.helidon</groupId>
+                <artifactId>helidon-bom</artifactId>
+                <version>${helidon.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- Helidon WebServer + WebSocket protocol upgrade. -->
+        <dependency>
+            <groupId>io.helidon.webserver</groupId>
+            <artifactId>helidon-webserver</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.helidon.webserver</groupId>
+            <artifactId>helidon-webserver-websocket</artifactId>
+        </dependency>
+
+        <!-- Helidon WebClient with HTTP/2 (h2c, prior knowledge). -->
+        <dependency>
+            <groupId>io.helidon.webclient</groupId>
+            <artifactId>helidon-webclient</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.helidon.webclient</groupId>
+            <artifactId>helidon-webclient-http2</artifactId>
+        </dependency>
+
+        <!-- Logging shim — Helidon expects SLF4J/JUL. -->
+        <dependency>
+            <groupId>io.helidon.logging</groupId>
+            <artifactId>helidon-logging-jul</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- Strict JSON + Blackbird (LambdaMetafactory-backed record ser/de). -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.module</groupId>
+            <artifactId>jackson-module-blackbird</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+
+        <!-- JSpecify @Nullable / @NonNull (NullAway recognizes these natively). -->
+        <dependency>
+            <groupId>org.jspecify</groupId>
+            <artifactId>jspecify</artifactId>
+            <version>${jspecify.version}</version>
+        </dependency>
+
+        <!-- Tests. -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.helidon.webserver.testing.junit5</groupId>
+            <artifactId>helidon-webserver-testing-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.helidon.webclient</groupId>
+            <artifactId>helidon-webclient-websocket</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>stt-java-helidon-nima</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>${maven.enforcer.plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>enforce-versions</id>
+                        <goals><goal>enforce</goal></goals>
+                        <configuration>
+                            <rules>
+                                <requireMavenVersion><version>3.9.0</version></requireMavenVersion>
+                                <requireJavaVersion><version>25</version></requireJavaVersion>
+                                <dependencyConvergence/>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>${maven.compiler.plugin.version}</version>
+                <configuration>
+                    <release>${maven.compiler.release}</release>
+                    <showWarnings>true</showWarnings>
+                    <failOnWarning>true</failOnWarning>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>com.google.errorprone</groupId>
+                            <artifactId>error_prone_core</artifactId>
+                            <version>${errorprone.version}</version>
+                        </path>
+                        <path>
+                            <groupId>com.uber.nullaway</groupId>
+                            <artifactId>nullaway</artifactId>
+                            <version>${nullaway.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                    <compilerArgs>
+                        <arg>-XDcompilePolicy=simple</arg>
+                        <arg>--should-stop=ifError=FLOW</arg>
+                        <arg>-Xplugin:ErrorProne -XepOpt:NullAway:AnnotatedPackages=stt</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>com.diffplug.spotless</groupId>
+                <artifactId>spotless-maven-plugin</artifactId>
+                <version>${spotless.plugin.version}</version>
+                <configuration>
+                    <java>
+                        <palantirJavaFormat>
+                            <version>${palantir.version}</version>
+                        </palantirJavaFormat>
+                        <removeUnusedImports/>
+                        <trimTrailingWhitespace/>
+                        <endWithNewline/>
+                    </java>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals><goal>check</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${maven.surefire.plugin.version}</version>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>${maven.shade.plugin.version}</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>shade</goal></goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>${mainClass}</mainClass>
+                                </transformer>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

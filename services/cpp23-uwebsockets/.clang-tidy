@@ -1,0 +1,32 @@
+---
+# Modern C++ lint. We enable the four big families (bugprone, performance,
+# modernize, readability) and pull in cppcoreguidelines selectively — the
+# whole cppcoreguidelines-* set is too aggressive (it complains about
+# pointer arithmetic inside std::span and about union usage in glaze).
+Checks: >
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  cert-*,
+  -cert-err58-cpp,
+  cppcoreguidelines-avoid-non-const-global-variables,
+  cppcoreguidelines-init-variables,
+  cppcoreguidelines-narrowing-conversions,
+  cppcoreguidelines-prefer-member-initializer,
+  cppcoreguidelines-pro-type-cstyle-cast,
+  cppcoreguidelines-pro-type-member-init,
+  cppcoreguidelines-pro-type-static-cast-downcast,
+  cppcoreguidelines-rvalue-reference-param-not-moved,
+  cppcoreguidelines-slicing,
+  misc-const-correctness,
+  misc-unused-parameters,
+  modernize-*,
+  -modernize-use-trailing-return-type,
+  -modernize-avoid-c-arrays,
+  performance-*,
+  readability-*,
+  -readability-identifier-length,
+  -readability-magic-numbers
+
+WarningsAsErrors: '*'
+HeaderFilterRegex: '^.*/services/cpp23-uwebsockets/src/.*$'
+FormatStyle: file

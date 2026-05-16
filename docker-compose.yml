@@ -1,0 +1,483 @@
+x-app-single: &app-single
+  cpus: 1.0
+  mem_limit: 1g
+
+x-app-multi: &app-multi
+  cpus: 4.0
+  mem_limit: 4g
+
+x-loadgen-limits: &loadgen-limits
+  cpus: 4.0
+  mem_limit: 4g
+
+x-python-build: &python-build
+  context: .
+  dockerfile: docker/python-fastapi.Dockerfile
+  args:
+    PYTHON_FT_IMAGE: "quay.io/pypa/manylinux_2_28_aarch64@sha256:c269bed3fc0ba21aac08ff67bf1d657d4967a9c0582fc8880a0e302f8ca78bdd"
+    UV_IMAGE: "ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a"
+    UV_VERSION: "0.11.7"
+
+x-typescript-build: &typescript-build
+  context: .
+  dockerfile: docker/typescript-bun.Dockerfile
+  args:
+    BUN_IMAGE: "oven/bun:1.3.13-debian@sha256:e95356cb8e1de62ad69ab3bd3584ba947013d27650a226804d2fc0af4e17dac2"
+
+x-go-build: &go-build
+  context: .
+  dockerfile: docker/go-nethttp.Dockerfile
+  args:
+    GO_IMAGE: "golang:1.26.3-bookworm@sha256:252599aeb51ad60b83e4d8821802068127c528c707cb7dd7afd93be057c6011c"
+
+x-java-build: &java-build
+  context: .
+  dockerfile: docker/java-helidon-nima.Dockerfile
+  args:
+    MAVEN_IMAGE: "maven:3.9.11-eclipse-temurin-25-noble@sha256:407c4423cec0cf2981055bc2c6c0dc211d9605b6669279b95997f2d1c7e91e2c"
+    JRE_IMAGE: "eclipse-temurin:25-jre-noble@sha256:b27ca47660a8fa837e47a8533b9b1a3a430295cf29ca28d91af4fd121572dc29"
+
+x-scala-build: &scala-build
+  context: .
+  dockerfile: docker/scala-pekko.Dockerfile
+  args:
+    SBT_IMAGE: "sbtscala/scala-sbt:eclipse-temurin-25.0.1_8_1.12.11_3.3.7@sha256:6fe01cddabc2896069d3605b25a77343e93a11e2f45831bd9b54e0fb631ed96c"
+    JRE_IMAGE: "eclipse-temurin:25-jre-noble@sha256:b27ca47660a8fa837e47a8533b9b1a3a430295cf29ca28d91af4fd121572dc29"
+
+x-cpp-build: &cpp-build
+  context: .
+  dockerfile: docker/cpp23-uwebsockets.Dockerfile
+  args:
+    BAZELISK_VERSION: "1.29.0"
+
+# FLUSH_INTERVAL_MS: gateway-to-inference batch cadence. Clients still upload
+# 20 ms PCM frames immediately, but gateways flush larger per-session batches
+# to reduce backend request overhead. The primary benchmark profile uses 1000 ms.
+#
+# FLUSH_PHASE_JITTER_MS: one-time random offset (uniform [0, jitter_ms]) added
+# to each session's first scheduled flush; subsequent flushes hold the exact
+# FLUSH_INTERVAL_MS cadence. Set it to match FLUSH_INTERVAL_MS so a population
+# that connects in a tight loadgen burst spreads evenly across the flush window
+# instead of slamming the inference server in lockstep. Code default is 0 so
+# unit tests stay deterministic.
+x-python-env: &python-env
+  CPU_PASSES: "4"
+  MODEL_DELAY_MS: "75"
+  FLUSH_INTERVAL_MS: "1000"
+  FLUSH_PHASE_JITTER_MS: "1000"
+  PORT: "8000"
+  INFERENCE_URL: "http://inference-server:9000"
+
+x-elixir-env: &elixir-env
+  CPU_PASSES: "4"
+  MODEL_DELAY_MS: "75"
+  FINCH_POOL_COUNT: "50"
+  FLUSH_INTERVAL_MS: "1000"
+  FLUSH_PHASE_JITTER_MS: "1000"
+  PORT: "4000"
+  INFERENCE_URL: "http://inference-server:9000"
+
+x-rust-env: &rust-env
+  CPU_PASSES: "4"
+  MODEL_DELAY_MS: "75"
+  INFERENCE_HTTP_CLIENTS: "512"
+  FLUSH_INTERVAL_MS: "1000"
+  FLUSH_PHASE_JITTER_MS: "1000"
+  PORT: "3000"
+  INFERENCE_URL: "http://inference-server:9000"
+
+x-typescript-env: &typescript-env
+  CPU_PASSES: "4"
+  MODEL_DELAY_MS: "75"
+  FLUSH_INTERVAL_MS: "1000"
+  FLUSH_PHASE_JITTER_MS: "1000"
+  INFERENCE_URL: "http://inference-server:9000"
+  PORT: "7000"
+  BUN_CONFIG_MAX_HTTP_REQUESTS: "4096"
+
+x-go-env: &go-env
+  CPU_PASSES: "4"
+  MODEL_DELAY_MS: "75"
+  INFERENCE_HTTP_CLIENTS: "4"
+  FLUSH_INTERVAL_MS: "1000"
+  FLUSH_PHASE_JITTER_MS: "1000"
+  INFERENCE_URL: "http://inference-server:9000"
+  PORT: "6000"
+
+x-java-env: &java-env
+  CPU_PASSES: "4"
+  MODEL_DELAY_MS: "75"
+  INFERENCE_HTTP_CLIENTS: "4"
+  FLUSH_INTERVAL_MS: "1000"
+  FLUSH_PHASE_JITTER_MS: "1000"
+  PORT: "5000"
+  INFERENCE_URL: "http://inference-server:9000"
+  # Override the Dockerfile default to drop -Djdk.tracePinnedThreads=full for
+  # load-test runs. JEP 491 (JDK 24) means pin events should be rare; the
+  # safety-net flag is left on in dev/conformance only, not in benchmarks.
+  JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
+
+x-scala-env: &scala-env
+  CPU_PASSES: "4"
+  MODEL_DELAY_MS: "75"
+  INFERENCE_HTTP_CLIENTS: "4"
+  FLUSH_INTERVAL_MS: "1000"
+  FLUSH_PHASE_JITTER_MS: "1000"
+  PORT: "2500"
+  INFERENCE_URL: "http://inference-server:9000"
+  # Same JVM tuning as the Java gateway — single-process Pekko ActorSystem.
+  JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
+
+x-cpp-env: &cpp-env
+  CPU_PASSES: "4"
+  MODEL_DELAY_MS: "75"
+  # Async libcurl multi HTTP/2 connections to the inference server. The C++
+  # gateway needs a wider pool than reqwest to avoid libcurl-side H2 queueing
+  # at the 1-vCPU edge.
+  INFERENCE_HTTP_CLIENTS: "128"
+  FLUSH_INTERVAL_MS: "1000"
+  FLUSH_PHASE_JITTER_MS: "1000"
+  PORT: "1500"
+  INFERENCE_URL: "http://inference-server:9000"
+
+# All gateway services depend on a healthy inference-server. Without this,
+# `docker compose up rust-axum-single` (etc.) would silently skip starting
+# inference-server because its profile only kicks in when no service names
+# are listed; the gateway then POSTs into the void and produces zero
+# partials, which surfaces as "timed out waiting for partial" in loadgen.
+x-needs-inference: &needs-inference
+  inference-server:
+    condition: service_healthy
+
+services:
+  # The deterministic STT inference simulator. All gateways POST PCM batches
+  # here over HTTP/2 (h2c) instead of computing inline. Deliberately runs
+  # without an explicit `cpus:` cap so it always has at least as many cores
+  # as the gateway under test (host CPUs vs gateway's cpus: 1.0/4.0). Add
+  # `cpus:` here only if you want to deliberately starve the simulated GPU.
+  #
+  # Concurrency policy: the simulated-GPU stream cap (MODEL_MAX_CONCURRENT)
+  # is set far above any session count we run, so requests never queue at
+  # the inference layer. The bottleneck under load must always be the
+  # gateway under test, not this server. To later model GPU saturation,
+  # lower MODEL_MAX_CONCURRENT below `sessions / (MODEL_DELAY_MS/1000)`
+  # (e.g. 64 with 75ms latency = ~853 RPS, saturates around 213 sessions).
+  inference-server:
+    mem_limit: 4g
+    profiles: ["single", "multi"]
+    build:
+      context: .
+      dockerfile: docker/inference-server.Dockerfile
+    environment:
+      CPU_PASSES: "4"
+      MODEL_DELAY_MS: "75"
+      MODEL_MAX_CONCURRENT: "65536"
+      PORT: "9000"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:9000/health"]
+      interval: 2s
+      timeout: 1s
+      retries: 10
+      start_period: 1s
+
+
+  # Stock single-loop (one asyncio loop). Free-threading still helps the CPU
+  # stub via the in-app ThreadPoolExecutor sized by WORKER_THREADS.
+  python-fastapi-stock-single:
+    <<: *app-single
+    profiles: ["single"]
+    build: *python-build
+    depends_on: *needs-inference
+    environment:
+      <<: *python-env
+      WORKER_THREADS: "1"
+    ports:
+      - "8001:8000"
+
+  python-fastapi-stock-multi:
+    <<: *app-multi
+    profiles: ["multi"]
+    build: *python-build
+    depends_on: *needs-inference
+    environment:
+      <<: *python-env
+      WORKER_THREADS: "4"
+    ports:
+      - "8001:8000"
+
+  # GIL-enabled (regular 3.14, NOT 3.14t) variant of stock-single, for
+  # quantifying free-threading's overhead on a single-loop / single-vCPU
+  # workload. Uses the same Dockerfile via PY_VARIANT=gil build args.
+  # Investigation: results/python-bottleneck-investigation/NOTES.md.
+  python-fastapi-stock-gil-single:
+    <<: *app-single
+    profiles: ["single"]
+    build:
+      context: .
+      dockerfile: docker/python-fastapi.Dockerfile
+      args:
+        PYTHON_FT_IMAGE: "quay.io/pypa/manylinux_2_28_aarch64@sha256:c269bed3fc0ba21aac08ff67bf1d657d4967a9c0582fc8880a0e302f8ca78bdd"
+        UV_IMAGE: "ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a"
+        UV_VERSION: "0.11.7"
+        PY_VARIANT: "gil"
+        PY_DIR: "cp314-cp314"
+        PY_EXE: "python3.14"
+        PY_GIL_DISABLED_EXPECTED: "0"
+    depends_on: *needs-inference
+    environment:
+      <<: *python-env
+      WORKER_THREADS: "1"
+      PY_VARIANT: "gil"
+      # Phase J finding: uvloop lifts the strict-zero ceiling from ~475 to
+      # ~600 sessions on this 1-vCPU shape. --task-impl rust regressed,
+      # --runtime-threads 2 regressed (1-vCPU oversubscription).
+      # Pass-through env vars allow further per-experiment overrides.
+      GRANIAN_LOOP_KIND: "${GRANIAN_LOOP_KIND:-uvloop}"
+      GRANIAN_TASK_IMPL: "${GRANIAN_TASK_IMPL:-asyncio}"
+      GRANIAN_RUNTIME_THREADS: "${GRANIAN_RUNTIME_THREADS:-}"
+    ports:
+      - "8003:8000"
+
+  python-fastapi-stock-gil-multi:
+    <<: *app-multi
+    profiles: ["multi"]
+    build:
+      context: .
+      dockerfile: docker/python-fastapi.Dockerfile
+      args:
+        PYTHON_FT_IMAGE: "quay.io/pypa/manylinux_2_28_aarch64@sha256:c269bed3fc0ba21aac08ff67bf1d657d4967a9c0582fc8880a0e302f8ca78bdd"
+        UV_IMAGE: "ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a"
+        UV_VERSION: "0.11.7"
+        PY_VARIANT: "gil"
+        PY_DIR: "cp314-cp314"
+        PY_EXE: "python3.14"
+        PY_GIL_DISABLED_EXPECTED: "0"
+    depends_on: *needs-inference
+    environment:
+      <<: *python-env
+      WORKER_THREADS: "4"
+      PY_VARIANT: "gil"
+      GRANIAN_LOOP_KIND: "${GRANIAN_LOOP_KIND:-uvloop}"
+      GRANIAN_TASK_IMPL: "${GRANIAN_TASK_IMPL:-asyncio}"
+      GRANIAN_RUNTIME_THREADS: "${GRANIAN_RUNTIME_THREADS:-}"
+    ports:
+      - "8003:8000"
+
+  # Free-threading multi-loop (N asyncio loops in one CPython interpreter
+  # without GIL contention).
+  #
+  # mt-single is deliberately oversubscribed: 2 loops on 1 vCPU. It answers
+  # "does enabling mt mode on a single-core deployment help, hurt, or wash?"
+  # — the loops time-slice on one vCPU, so any speedup over stock-single
+  # would have to come from I/O concurrency, not from parallel Python work.
+  # mt-multi is the canonical free-threaded config: 4 loops on 4 vCPU.
+  python-fastapi-mt-single:
+    <<: *app-single
+    profiles: ["single"]
+    build: *python-build
+    depends_on: *needs-inference
+    environment:
+      <<: *python-env
+      WORKER_THREADS: "1"
+      GRANIAN_LOOPS: "2"
+    ports:
+      - "8002:8000"
+
+  python-fastapi-mt-multi:
+    <<: *app-multi
+    profiles: ["multi"]
+    build: *python-build
+    depends_on: *needs-inference
+    environment:
+      <<: *python-env
+      WORKER_THREADS: "4"
+      GRANIAN_LOOPS: "4"
+    ports:
+      - "8002:8000"
+
+  elixir-phoenix-single:
+    <<: *app-single
+    profiles: ["single"]
+    build:
+      context: .
+      dockerfile: docker/elixir-phoenix.Dockerfile
+    depends_on: *needs-inference
+    environment:
+      <<: *elixir-env
+      WORKER_THREADS: "1"
+    ports:
+      - "4001:4000"
+
+  elixir-phoenix-multi:
+    <<: *app-multi
+    profiles: ["multi"]
+    build:
+      context: .
+      dockerfile: docker/elixir-phoenix.Dockerfile
+    depends_on: *needs-inference
+    environment:
+      <<: *elixir-env
+      WORKER_THREADS: "4"
+    ports:
+      - "4001:4000"
+
+  rust-axum-single:
+    <<: *app-single
+    profiles: ["single"]
+    build:
+      context: .
+      dockerfile: docker/rust-axum.Dockerfile
+    depends_on: *needs-inference
+    environment:
+      <<: *rust-env
+      WORKER_THREADS: "1"
+    ports:
+      - "3001:3000"
+
+  rust-axum-multi:
+    <<: *app-multi
+    profiles: ["multi"]
+    build:
+      context: .
+      dockerfile: docker/rust-axum.Dockerfile
+    depends_on: *needs-inference
+    environment:
+      <<: *rust-env
+      WORKER_THREADS: "4"
+    ports:
+      - "3001:3000"
+
+  go-nethttp-single:
+    <<: *app-single
+    mem_limit: 2g
+    profiles: ["single"]
+    build: *go-build
+    depends_on: *needs-inference
+    environment:
+      <<: *go-env
+      GOMAXPROCS: "1"
+    ports:
+      - "6001:6000"
+
+  go-nethttp-multi:
+    <<: *app-multi
+    profiles: ["multi"]
+    build: *go-build
+    depends_on: *needs-inference
+    environment:
+      <<: *go-env
+      GOMAXPROCS: "4"
+    ports:
+      - "6001:6000"
+
+  typescript-bun-single:
+    <<: *app-single
+    # Bun's 1-vCPU benchmark shape uses extra memory headroom so the edge is
+    # not dominated by the generic 1 GiB single-profile limit.
+    mem_limit: 2g
+    profiles: ["single"]
+    build: *typescript-build
+    depends_on: *needs-inference
+    environment: *typescript-env
+    ports:
+      - "7001:7000"
+
+  # Experimental multi-vCPU shape for Bun's native server. This keeps the same
+  # single-process Bun implementation; it exists for apples-to-apples resource
+  # scheduling, not because the app spawns worker processes.
+  typescript-bun-multi:
+    <<: *app-multi
+    profiles: ["multi"]
+    build: *typescript-build
+    depends_on: *needs-inference
+    environment: *typescript-env
+    ports:
+      - "7001:7000"
+
+  # Java 21+ vthreads showcase: Helidon Níma is the only mainstream JVM web
+  # framework whose I/O model is built ground-up for virtual threads. JDK 25
+  # LTS inherits JEP 491 (delivered in JDK 24) so `synchronized` no longer
+  # pins the carrier across blocking I/O.
+  java-helidon-nima-single:
+    <<: *app-single
+    mem_limit: 2g
+    profiles: ["single"]
+    build: *java-build
+    depends_on: *needs-inference
+    environment:
+      <<: *java-env
+      WORKER_THREADS: "1"
+    ports:
+      - "5001:5000"
+
+  java-helidon-nima-multi:
+    <<: *app-multi
+    profiles: ["multi"]
+    build: *java-build
+    depends_on: *needs-inference
+    environment:
+      <<: *java-env
+      WORKER_THREADS: "4"
+    ports:
+      - "5001:5000"
+
+  # Scala 3 + Pekko Typed actor model — direct comparison to Elixir (BEAM actors) but on
+  # HotSpot. The session actor processes one Command at a time, enforcing the one-inflight
+  # invariant by mailbox semantics rather than by a semaphore.
+  scala-pekko-single:
+    cpus: 1.0
+    mem_limit: 2g
+    profiles: ["single"]
+    build: *scala-build
+    depends_on: *needs-inference
+    environment:
+      <<: *scala-env
+      WORKER_THREADS: "1"
+    ports:
+      - "2501:2500"
+
+  scala-pekko-multi:
+    <<: *app-multi
+    profiles: ["multi"]
+    build: *scala-build
+    depends_on: *needs-inference
+    environment:
+      <<: *scala-env
+      WORKER_THREADS: "4"
+    ports:
+      - "2501:2500"
+
+  # C++23 + uWebSockets gateway: the "raw performance ceiling" datapoint.
+  # uWS' loop-per-thread + no-GC + std::expected hot path is the closest
+  # comparison we have to Rust/Tokio without going to Rust itself.
+  cpp23-uwebsockets-single:
+    <<: *app-single
+    profiles: ["single"]
+    build: *cpp-build
+    depends_on: *needs-inference
+    mem_limit: 2g
+    environment:
+      <<: *cpp-env
+      WORKER_THREADS: "1"
+    ports:
+      - "1501:1500"
+
+  cpp23-uwebsockets-multi:
+    <<: *app-multi
+    profiles: ["multi"]
+    build: *cpp-build
+    depends_on: *needs-inference
+    environment:
+      <<: *cpp-env
+      WORKER_THREADS: "4"
+    ports:
+      - "1501:1500"
+
+  loadgen:
+    <<: *loadgen-limits
+    profiles: ["loadgen"]
+    build:
+      context: .
+      dockerfile: docker/loadgen-rust.Dockerfile
+    volumes:
+      - ./results:/results

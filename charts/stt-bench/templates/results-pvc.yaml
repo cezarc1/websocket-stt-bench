@@ -1,0 +1,16 @@
+{{- if and .Values.results.createPvc .Values.results.claimName }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.results.claimName }}
+  labels:
+    {{- include "stt-bench.labels" . | nindent 4 }}
+    app: stt-benchmark
+    component: results
+spec:
+  accessModes:
+    {{- toYaml .Values.results.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.results.size | quote }}
+{{- end }}

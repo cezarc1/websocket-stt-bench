@@ -1,0 +1,124 @@
+load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile_commands")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+
+# Strict warnings for our own targets. -Wconversion / -Wold-style-cast /
+# -Wshadow / -Wdeprecated-declarations are omitted because the header-only
+# deps (Glaze hot-path templates, uWebSockets' `MoveOnlyFunction.h` using
+# C++23-deprecated `std::aligned_storage_t`) instantiate inside our TUs and
+# would otherwise fail the strict build. The remaining set still catches
+# real C++ bugs.
+STRICT_COPTS = [
+    "-Werror",
+    "-Wall",
+    "-Wextra",
+    "-Wpedantic",
+    "-Wnon-virtual-dtor",
+    "-Wno-deprecated-declarations",
+]
+
+# `stt_core` carries every translation unit except main.cpp so the test
+# binaries can link against it without dragging in `int main()`.
+cc_library(
+    name = "stt_core",
+    copts = STRICT_COPTS,
+    srcs = [
+        "src/config.cpp",
+        "src/inference.cpp",
+        "src/protocol.cpp",
+        "src/server.cpp",
+        "src/session.cpp",
+    ],
+    hdrs = [
+        "src/config.hpp",
+        "src/inference.hpp",
+        "src/protocol.hpp",
+        "src/server.hpp",
+        "src/session.hpp",
+    ],
+    includes = ["src"],
+    strip_include_prefix = "src",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@glaze",
+        "@uwebsockets",
+        "//third_party:system_curl",
+    ],
+)
+
+cc_binary(
+    name = "stt-cpp23-uwebsockets",
+    srcs = ["src/main.cpp"],
+    copts = STRICT_COPTS,
+    visibility = ["//visibility:public"],
+    deps = [":stt_core"],
+)
+
+# Shared fixtures: RecordingSink, CapturingInference, InlineScheduler, base_config, frame_of.
+cc_library(
+    name = "test_support",
+    hdrs = ["tests/test_support.hpp"],
+    testonly = True,
+    strip_include_prefix = "tests",
+    deps = [":stt_core"],
+)
+
+# `@doctest//:main` from the BCR provides DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN in
+# one TU per test binary — no need to ship our own `tests/main.cpp`.
+cc_test(
+    name = "config_test",
+    srcs = ["tests/config_test.cpp"],
+    copts = STRICT_COPTS,
+    deps = [
+        ":stt_core",
+        "@doctest//doctest:main",
+    ],
+)
+
+cc_test(
+    name = "inference_test",
+    srcs = ["tests/inference_test.cpp"],
+    copts = STRICT_COPTS,
+    deps = [
+        ":stt_core",
+        "@doctest//doctest:main",
+    ],
+)
+
+cc_test(
+    name = "protocol_test",
+    srcs = ["tests/protocol_test.cpp"],
+    copts = STRICT_COPTS,
+    deps = [
+        ":stt_core",
+        "@doctest//doctest:main",
+    ],
+)
+
+cc_test(
+    name = "session_test",
+    srcs = ["tests/session_test.cpp"],
+    copts = STRICT_COPTS,
+    deps = [
+        ":stt_core",
+        ":test_support",
+        "@doctest//doctest:main",
+    ],
+)
+
+# `bazel run //:refresh_compile_commands` writes `compile_commands.json` at the
+# workspace root with every flag (including `-std=c++23` and the hermetic
+# libc++ include path under `external/toolchains_llvm++llvm+llvm_toolchain_llvm`)
+# that Bazel uses to build these targets. clangd / Cursor / VSCode pick it up
+# automatically and stop flagging C++23 stdlib headers like `<expected>`.
+# Re-run whenever you add a new source file or change copts.
+refresh_compile_commands(
+    name = "refresh_compile_commands",
+    targets = {
+        "//:stt_core": "",
+        "//:stt-cpp23-uwebsockets": "",
+        "//:protocol_test": "",
+        "//:config_test": "",
+        "//:inference_test": "",
+        "//:session_test": "",
+    },
+)

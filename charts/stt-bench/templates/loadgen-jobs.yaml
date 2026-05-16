@@ -1,0 +1,78 @@
+{{- if .Values.loadgen.enabled }}
+{{- range .Values.loadgen.runs }}
+{{- $gateway := index $.Values.gateways .gateway }}
+{{- if not $gateway }}
+{{- fail (printf "loadgen run %s references unknown gateway %s" .name .gateway) }}
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: stt-loadgen-{{ .name }}
+  labels:
+    {{- include "stt-bench.labels" $ | nindent 4 }}
+    app: stt-benchmark
+    component: loadgen
+    gateway: {{ .gateway }}
+spec:
+  suspend: {{ default true .suspend }}
+  backoffLimit: 0
+  ttlSecondsAfterFinished: {{ $.Values.loadgen.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        app: stt-benchmark
+        component: loadgen
+        gateway: {{ .gateway }}
+    spec:
+      {{- include "stt-bench.imagePullSecrets" $ | nindent 6 }}
+      securityContext:
+        {{- toYaml $.Values.podSecurityContextWithFsGroup | nindent 8 }}
+      restartPolicy: Never
+      containers:
+        - name: loadgen
+          image: {{ include "stt-bench.image" (list $ $.Values.loadgen.image) }}
+          imagePullPolicy: {{ $.Values.images.pullPolicy }}
+          command:
+            - /bin/sh
+            - -lc
+          args:
+            - |
+              set -eu
+              mkdir -p /results
+              sleep 5
+              stt-loadgen \
+                --url ws://{{ $gateway.name }}:{{ $gateway.port }}/ws/stt \
+                --service-name {{ .serviceName | quote }} \
+                --sessions {{ .sessions }} \
+                --warmup-secs {{ default $.Values.loadgen.defaults.warmupSecs .warmupSecs }} \
+                --measure-secs {{ default $.Values.loadgen.defaults.measureSecs .measureSecs }} \
+                --ramp-up-secs {{ default $.Values.loadgen.defaults.rampUpSecs .rampUpSecs }} \
+                --session-start-spread-ms {{ default $.Values.loadgen.defaults.sessionStartSpreadMs .sessionStartSpreadMs }} \
+                --repeat {{ default $.Values.loadgen.defaults.repeat .repeat }} \
+                --samples-out /results/{{ .outputPrefix }}.samples.csv \
+                > /results/{{ .outputPrefix }}.summary.json
+              cat /results/{{ .outputPrefix }}.summary.json
+          resources:
+            {{- toYaml $.Values.loadgen.resources | nindent 12 }}
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "true"]
+            periodSeconds: 30
+            timeoutSeconds: 1
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "true"]
+            periodSeconds: 30
+            timeoutSeconds: 1
+          securityContext:
+            {{- toYaml $.Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: results
+              mountPath: /results
+      volumes:
+        - name: results
+          persistentVolumeClaim:
+            claimName: {{ $.Values.results.claimName }}
+---
+{{- end }}
+{{- end }}

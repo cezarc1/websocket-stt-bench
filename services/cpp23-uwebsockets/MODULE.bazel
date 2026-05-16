@@ -1,0 +1,78 @@
+# Bzlmod root for the C++23 + uWebSockets gateway.
+#
+# Hermetic Clang 21 toolchain is wired in via `toolchains_llvm` so the build is
+# byte-identical on every contributor's machine and in CI — no system clang or
+# apt repo needed. This is the C++ equivalent of how `versions.lock.toml` pins
+# `uv`, `sbt`, `bazelisk`, etc. for the other gateways.
+module(
+    name = "stt_cpp23_uwebsockets",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "rules_cc", version = "0.2.17")
+bazel_dep(name = "platforms", version = "1.0.0")
+
+# Hermetic Clang/LLVM toolchain. Clang 21.1.8 is the first release where
+# libc++'s C++23 surface (<generator>, <flat_map>, <stacktrace>, <spanstream>,
+# <mdspan>, std::print) has no asterisks — see
+# https://en.cppreference.com/w/cpp/compiler_support/23.
+bazel_dep(name = "toolchains_llvm", version = "1.7.0")
+llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
+llvm.toolchain(llvm_version = "21.1.8")
+use_repo(llvm, "llvm_toolchain")
+register_toolchains("@llvm_toolchain//:all")
+
+# Unit tests: doctest is on the BCR. Slightly older than the upstream pin in
+# versions.lock.toml (2.5.2 vs 2.4.12.bcr.1) but no behavioural differences
+# matter for our test surface. Not marked dev-only because the BUILD targets
+# need it on every `bazel build //...`.
+bazel_dep(name = "doctest", version = "2.4.12.bcr.1")
+
+# Glaze, uWebSockets, and uSockets aren't on the Bazel Central Registry; we
+# vendor the tarballs via http_archive and supply minimal BUILD files for each.
+http_archive = use_repo_rule(
+    "@bazel_tools//tools/build_defs/repo:http.bzl",
+    "http_archive",
+)
+
+# JSON: Glaze is the fastest C++ JSON library in mid-2026 (~20-30× faster than
+# nlohmann/json on the hot path). Header-only, ships strict decoding via
+# `glz::opts{.error_on_unknown_keys = true}`.
+http_archive(
+    name = "glaze",
+    build_file = "//third_party:glaze.BUILD",
+    strip_prefix = "glaze-7.6.0",
+    sha256 = "839cd7bd2bda4db1a4e973f18851c2ecdccf82c75512453f68b2389d43a3e8ad",
+    urls = ["https://github.com/stephenberry/glaze/archive/refs/tags/v7.6.0.tar.gz"],
+)
+
+http_archive(
+    name = "usockets",
+    build_file = "//third_party:usockets.BUILD",
+    strip_prefix = "uSockets-0.8.8",
+    sha256 = "d14d2efe1df767dbebfb8d6f5b52aa952faf66b30c822fbe464debaa0c5c0b17",
+    urls = ["https://github.com/uNetworking/uSockets/archive/refs/tags/v0.8.8.tar.gz"],
+)
+
+http_archive(
+    name = "uwebsockets",
+    build_file = "//third_party:uwebsockets.BUILD",
+    strip_prefix = "uWebSockets-20.77.0",
+    sha256 = "9884f7bce0d34c776d450f1a1f31858aaced74c4454f2758543ed557df07d1e0",
+    urls = ["https://github.com/uNetworking/uWebSockets/archive/refs/tags/v20.77.0.tar.gz"],
+)
+
+# Editor tooling: clangd (used by Cursor, VSCode, neovim) reads compile flags
+# from a `compile_commands.json` at the workspace root. Without it the IDE
+# falls back to the host clang/libc++ on macOS, which does not ship the C++23
+# headers (`<expected>`, `<flat_map>`, `<print>`) we depend on. Hedron's
+# extractor runs Bazel's own aquery and emits the exact `-std=c++23` and
+# hermetic libc++ include flags that the build uses. Regenerate with
+# `bazel run //:refresh_compile_commands`. Dev-only: nothing in the production
+# build depends on it. Not on the BCR, so pinned by commit via git_override.
+bazel_dep(name = "hedron_compile_commands", dev_dependency = True)
+git_override(
+    module_name = "hedron_compile_commands",
+    remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
+    commit = "abb61a688167623088f8768cc9264798df6a9d10",
+)

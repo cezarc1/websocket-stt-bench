@@ -1,0 +1,58 @@
+[project]
+name = "stt-fastapi-gateway"
+version = "0.1.0"
+description = "FastAPI implementation for websocket-stt-bench"
+requires-python = "==3.14.4"
+dependencies = [
+    "aiohttp==3.13.5",
+    "fastapi==0.136.1",
+    "granian[uvloop,rloop]==2.7.4",
+    "pydantic==2.13.3",
+    "wsproto==1.3.2",
+]
+
+[dependency-groups]
+dev = [
+    "ruff==0.15.12",
+    "ty==0.0.31",
+    "pytest==8.4.2",
+    "pyperf==2.10.0",
+    "numpy==2.4.4",
+]
+
+[tool.uv]
+required-version = "==0.11.7"
+python-preference = "only-system"
+python-downloads = "never"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+# Defaults (E4, E7, E9, F) plus a curated set of higher-value rule families.
+# Ruff has no built-in "recommended"/"strict" preset; this is the closest
+# equivalent. Using `extend-select` lets ruff's evolving defaults flow through
+# instead of pinning them here.
+extend-select = [
+    "I",      # isort
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "SIM",    # flake8-simplify
+    "ASYNC",  # flake8-async (catches blocking calls in async, unawaited coros)
+    "RUF",    # ruff-specific (dead code, ambiguous patterns)
+    "PERF",   # performance anti-patterns
+    "C4",     # flake8-comprehensions
+    "PIE",    # flake8-pie (misc anti-patterns)
+    "RET",    # flake8-return (consistent return)
+    "LOG",    # flake8-logging
+    "G",      # flake8-logging-format
+    "FA",     # flake8-future-annotations
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Bench files intentionally exercise the patterns PERF flags.
+"tests/bench_*.py" = ["PERF"]
+
+[tool.ty.environment]
+python = "./.venv"

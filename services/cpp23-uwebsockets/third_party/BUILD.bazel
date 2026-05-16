@@ -1,0 +1,16 @@
+# Marker BUILD so Bazel can reach the third_party:*.BUILD files referenced
+# from MODULE.bazel via the `//third_party:...` label syntax.
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+exports_files([
+    "glaze.BUILD",
+    "usockets.BUILD",
+    "uwebsockets.BUILD",
+])
+
+cc_library(
+    name = "system_curl",
+    hdrs = [],
+    linkopts = ["-lcurl"],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,19 @@
+[advisories]
+version = 2
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+skip = [
+  { name = "base64", version = "=0.21.7" },
+]
+
+[licenses]
+allow = [
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "MIT",
+  "Unicode-3.0",
+  "Zlib",
+]
+confidence-threshold = 0.8

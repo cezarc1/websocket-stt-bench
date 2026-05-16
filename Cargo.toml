@@ -1,0 +1,36 @@
+[workspace]
+members = ["loadgen/rust", "services/inference-server", "services/rust-axum"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+publish = false
+rust-version = "1.95.0"
+
+[workspace.dependencies]
+anyhow = "=1.0.102"
+axum = { version = "=0.8.9", features = ["ws", "http2"] }
+bytes = "=1.11.1"
+clap = { version = "=4.6.1", features = ["derive", "env"] }
+futures-util = "=0.3.32"
+hdrhistogram = "=7.5.4"
+rand = "=0.10.1"
+rand_distr = "=0.6.0"
+reqwest = { version = "=0.12.27", default-features = false, features = ["http2", "json"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+tokio = { version = "=1.52.1", features = ["full"] }
+tokio-tungstenite = "=0.29.0"
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "fmt"] }
+
+# Benchmark binaries: cross-crate inlining + single codegen unit so hot loops
+# (the loadgen's frame generator/HDR histogram, the inference server's
+# compute_stub, the rust-axum select! arms) get the strongest backend
+# optimization. `panic = "abort"` removes unwind tables, which we don't need
+# in services that exit on the first panic.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"

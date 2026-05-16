@@ -1,0 +1,150 @@
+name: Build container images
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/images.yml"
+      - ".dockerignore"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "deny.toml"
+      - "docker/**"
+      - "loadgen/rust/**"
+      - "rust-toolchain.toml"
+      - "services/elixir-phoenix/**"
+      - "services/inference-server/**"
+      - "services/python-fastapi/**"
+      - "services/rust-axum/**"
+      - "services/typescript-bun/**"
+      - "services/go-nethttp/**"
+      - "services/java-helidon-nima/**"
+      - "services/scala-pekko/**"
+      - "services/cpp23-uwebsockets/**"
+      - "versions.lock.toml"
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+    paths:
+      - ".github/workflows/images.yml"
+      - ".dockerignore"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "deny.toml"
+      - "docker/**"
+      - "loadgen/rust/**"
+      - "rust-toolchain.toml"
+      - "services/elixir-phoenix/**"
+      - "services/inference-server/**"
+      - "services/python-fastapi/**"
+      - "services/rust-axum/**"
+      - "services/typescript-bun/**"
+      - "services/go-nethttp/**"
+      - "services/java-helidon-nima/**"
+      - "services/scala-pekko/**"
+      - "services/cpp23-uwebsockets/**"
+      - "versions.lock.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    name: Build ${{ matrix.image }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: inference-server
+            dockerfile: docker/inference-server.Dockerfile
+            build_args: ""
+          - image: rust-axum
+            dockerfile: docker/rust-axum.Dockerfile
+            build_args: ""
+          - image: elixir-phoenix
+            dockerfile: docker/elixir-phoenix.Dockerfile
+            build_args: ""
+          - image: python-fastapi-ft
+            dockerfile: docker/python-fastapi.Dockerfile
+            build_args: |
+              PYTHON_FT_IMAGE=quay.io/pypa/manylinux_2_28_x86_64@sha256:09c9455c6285345727a9caf9b8166cbcb7afab8594cb94412d5e67c539940851
+              UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
+              UV_VERSION=0.11.7
+          - image: python-fastapi-gil
+            dockerfile: docker/python-fastapi.Dockerfile
+            build_args: |
+              PYTHON_FT_IMAGE=quay.io/pypa/manylinux_2_28_x86_64@sha256:09c9455c6285345727a9caf9b8166cbcb7afab8594cb94412d5e67c539940851
+              UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
+              UV_VERSION=0.11.7
+              PY_VARIANT=gil
+              PY_DIR=cp314-cp314
+              PY_EXE=python3.14
+              PY_GIL_DISABLED_EXPECTED=0
+          - image: typescript-bun
+            dockerfile: docker/typescript-bun.Dockerfile
+            build_args: |
+              BUN_IMAGE=oven/bun:1.3.13-debian@sha256:e95356cb8e1de62ad69ab3bd3584ba947013d27650a226804d2fc0af4e17dac2
+          - image: go-nethttp
+            dockerfile: docker/go-nethttp.Dockerfile
+            build_args: |
+              GO_IMAGE=golang:1.26.3-bookworm@sha256:252599aeb51ad60b83e4d8821802068127c528c707cb7dd7afd93be057c6011c
+          - image: java-helidon-nima
+            dockerfile: docker/java-helidon-nima.Dockerfile
+            build_args: |
+              MAVEN_IMAGE=maven:3.9.11-eclipse-temurin-25-noble@sha256:407c4423cec0cf2981055bc2c6c0dc211d9605b6669279b95997f2d1c7e91e2c
+              JRE_IMAGE=eclipse-temurin:25-jre-noble@sha256:b27ca47660a8fa837e47a8533b9b1a3a430295cf29ca28d91af4fd121572dc29
+          - image: scala-pekko
+            dockerfile: docker/scala-pekko.Dockerfile
+            build_args: |
+              SBT_IMAGE=sbtscala/scala-sbt:eclipse-temurin-25.0.1_8_1.12.11_3.3.7@sha256:6fe01cddabc2896069d3605b25a77343e93a11e2f45831bd9b54e0fb631ed96c
+              JRE_IMAGE=eclipse-temurin:25-jre-noble@sha256:b27ca47660a8fa837e47a8533b9b1a3a430295cf29ca28d91af4fd121572dc29
+          - image: cpp23-uwebsockets
+            dockerfile: docker/cpp23-uwebsockets.Dockerfile
+            build_args: |
+              BAZELISK_VERSION=1.29.0
+          - image: loadgen
+            dockerfile: docker/loadgen-rust.Dockerfile
+            build_args: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}
+          tags: |
+            type=sha,prefix=sha-
+            type=ref,event=branch
+            type=ref,event=tag
+
+      - name: Build and optionally push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build_args }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

@@ -1,0 +1,56 @@
+# Default build: C++23, treat every warning as fatal.
+#
+# We don't disable -fno-exceptions / -fno-rtti — libcurl uses neither but
+# Glaze and doctest use exceptions on internal error paths. The hot path
+# (parse JSON, build JSON, send WS) is exception-free in practice; we catch
+# and classify at the inference boundary.
+build --enable_platform_specific_config
+
+build --cxxopt=-std=c++23
+build --host_cxxopt=-std=c++23
+# curl pulls in zlib (compression for HTTP) but the BCR `curl` module assumes
+# system zlib at link time. Add -lz so ld.lld finds the symbols.
+build --linkopt=-lz
+# Strict warnings are scoped per-target in BUILD.bazel so they apply to our
+# code only; third-party C deps (BoringSSL/curl/uSockets) don't compile
+# clean under -Wold-style-cast -Werror.
+
+# `bazel build --config=opt` for release.
+build:opt --compilation_mode=opt
+build:opt --copt=-O3
+build:opt --copt=-DNDEBUG
+
+# ASan + UBSan: `bazel test --config=asan //...`
+build:asan --copt=-fsanitize=address,undefined
+build:asan --copt=-fno-omit-frame-pointer
+build:asan --linkopt=-fsanitize=address,undefined
+build:asan --strip=never
+
+# ASan only: useful for load-test crash repros where third-party UBSan
+# diagnostics abort before the gateway reaches the workload.
+build:asan_only --copt=-fsanitize=address
+build:asan_only --copt=-fno-omit-frame-pointer
+build:asan_only --linkopt=-fsanitize=address
+build:asan_only --strip=never
+
+# TSan: mutually exclusive with ASan. Useful for verifying the
+# loop-per-thread invariant — there must be no data races between
+# the libcurl worker threads and the uWS event loops.
+build:tsan --copt=-fsanitize=thread
+build:tsan --linkopt=-fsanitize=thread
+build:tsan --strip=never
+
+# Lint via clang-tidy as a Bazel aspect: `bazel build --aspects=...`. The
+# aspect picks up `.clang-tidy` from this directory.
+build:tidy --aspects=//tools/clang_tidy:clang_tidy.bzl%clang_tidy_aspect
+build:tidy --output_groups=report
+
+# Use the hermetic Clang toolchain registered in MODULE.bazel.
+build --incompatible_enable_cc_toolchain_resolution
+
+# Test output: print stdout/stderr of failed tests inline.
+test --test_output=errors
+
+# Lockfile mode: error if MODULE.bazel.lock is out of date. Regenerate via
+# `bazel mod deps --lockfile_mode=update`.
+common --lockfile_mode=error

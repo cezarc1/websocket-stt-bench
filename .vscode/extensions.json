@@ -1,0 +1,25 @@
+{
+  // Workspace-recommended extensions. VS Code prompts contributors to install
+  // these when the repo is opened. Keep this list aligned with the toolchain
+  // pinned in versions.lock.toml.
+  "recommendations": [
+    // ---- Python (services/python-fastapi) ----
+    "ms-python.python",        // interpreter discovery, venv selection
+    "charliermarsh.ruff",      // lint + format (matches pyproject.toml)
+    // No `ty` extension yet — ty's checks come from the CLI via `just python-check`.
+
+    // ---- Rust (workspace at repo root) ----
+    "rust-lang.rust-analyzer", // LSP, formatter, clippy-on-save
+    "tamasfe.even-better-toml", // Cargo.toml / pyproject.toml / versions.lock.toml
+
+    // ---- Elixir (services/elixir-phoenix) — ElixirLS ----
+    // Chosen for explicit Elixir 1.19 + OTP 28 support (ElixirLS v0.30.0,
+    // 2025-11-17). Bundled dialyzer matches `mix dialyzer` in `just elixir-check`.
+    // Lexical and Next LS were both folded into Expert (alpha) in late 2025;
+    // revisit once Expert hits stable.
+    "elixir-lsp.elixir-ls",
+
+    // ---- Shared ----
+    "editorconfig.editorconfig"
+  ]
+}

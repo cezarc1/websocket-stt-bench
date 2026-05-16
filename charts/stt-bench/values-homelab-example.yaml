@@ -1,0 +1,125 @@
+# Example overrides for a single-node k3s/k8s homelab. Copy and adjust for
+# your environment. Replace `OWNER/websocket-stt-bench` with the GitHub owner
+# that publishes the images (the `images.yml` workflow pushes to
+# `ghcr.io/${{ github.repository }}/<image>`). The `host:` under
+# `inference.ingress` should point at your cluster's external address.
+
+imagePullSecrets:
+  - name: ghcr-pull-secret
+
+images:
+  registry: ghcr.io
+  repository: OWNER/websocket-stt-bench
+  tag: main
+  pullPolicy: Always
+
+inference:
+  enabled: true
+  replicas: 4
+  resources:
+    requests:
+      cpu: "6"
+      memory: 2Gi
+    limits:
+      cpu: "6"
+      memory: 2Gi
+  service:
+    type: NodePort
+    port: 9000
+    nodePort: 30900
+    externalTrafficPolicy: Local
+  ingress:
+    enabled: true
+    className: traefik
+    host: stt-inference.example.com
+    path: /
+
+gatewayCommonEnv:
+  CPU_PASSES: "4"
+  MODEL_DELAY_MS: "75"
+  FLUSH_INTERVAL_MS: "1000"
+  FLUSH_PHASE_JITTER_MS: "1000"
+  INFERENCE_URL: http://stt-inference-server.stt-bench.svc.cluster.local:9000
+
+gateways:
+  rust:
+    replicas: 0
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+  goNethttp:
+    replicas: 0
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+  goNethttp2cpu:
+    replicas: 0
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+  elixir:
+    replicas: 0
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+  pythonFt:
+    replicas: 0
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+  pythonGil:
+    replicas: 0
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+  typescriptBun:
+    replicas: 0
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+  javaHelidonNima:
+    replicas: 0
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+  javaHelidonNima2cpu:
+    replicas: 0
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi

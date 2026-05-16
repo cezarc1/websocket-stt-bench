@@ -1,0 +1,91 @@
+{
+  // ============================================================
+  //  Python  —  services/python-fastapi (CPython 3.14.4t free-threading)
+  // ============================================================
+  // Pin the interpreter to the uv-managed venv so Pylance/ruff/ty all agree.
+  "python.defaultInterpreterPath": "${workspaceFolder}/services/python-fastapi/.venv/bin/python",
+
+  // The project's type-checker is Astral `ty` (see [tool.ty.environment] in
+  // pyproject.toml), not Pylance. Turn Pylance type-checking off so squiggles
+  // come from one source of truth — `just python-check` runs `ty check`.
+  "python.analysis.typeCheckingMode": "off",
+
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "explicit",
+      "source.organizeImports.ruff": "explicit"
+    }
+  },
+  // Multi-root layout: ruff lives one level down. Point it at the right config.
+  "ruff.configuration": "${workspaceFolder}/services/python-fastapi/pyproject.toml",
+  "ruff.importStrategy": "fromEnvironment",
+
+  // ============================================================
+  //  Rust  —  workspace at repo root (loadgen + services/rust-axum)
+  // ============================================================
+  // Mirror `just rust-check` so editor squiggles == CI failures.
+  // Gate command: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+  "rust-analyzer.check.command": "clippy",
+  "rust-analyzer.check.allTargets": true,
+  "rust-analyzer.cargo.features": "all",
+  "rust-analyzer.check.extraArgs": ["--locked", "--", "-D", "warnings"],
+
+  // Run clippy on save instead of cargo check; small latency cost, big lint coverage.
+  "rust-analyzer.checkOnSave": true,
+
+  "[rust]": {
+    "editor.defaultFormatter": "rust-lang.rust-analyzer",
+    "editor.formatOnSave": true
+  },
+  "[toml]": {
+    "editor.defaultFormatter": "tamasfe.even-better-toml"
+  },
+
+  // ============================================================
+  //  Elixir  —  services/elixir-phoenix (Elixir 1.19.5 / OTP 28.5)
+  // ============================================================
+  // ElixirLS v0.30.0+ has explicit 1.19 + OTP 28 support and bundles dialyzer,
+  // matching the `mix dialyzer` step in `just elixir-check`.
+  "elixirLS.dialyzerEnabled": true,
+  // versions.lock.toml + mix.lock are the source of truth — let us manage deps,
+  // not the LSP.
+  "elixirLS.fetchDeps": false,
+  "elixirLS.suggestSpecs": true,
+  // Match the `mix format` invocation that the gate enforces.
+  "[elixir]": {
+    "editor.defaultFormatter": "elixir-lsp.elixir-ls",
+    "editor.formatOnSave": true
+  },
+  "[phoenix-heex]": {
+    "editor.defaultFormatter": "elixir-lsp.elixir-ls",
+    "editor.formatOnSave": true
+  },
+
+  // ============================================================
+  //  Workspace hygiene  —  hide build artefacts and pinned-uv tooling
+  // ============================================================
+  "files.exclude": {
+    "**/.tools": true,
+    "**/_build": true,
+    "**/deps": true,
+    "**/target": true,
+    "**/.elixir_ls": true,
+    "**/.venv": true,
+    "**/.ruff_cache": true,
+    "**/__pycache__": true
+  },
+  "files.watcherExclude": {
+    "**/target/**": true,
+    "**/_build/**": true,
+    "**/deps/**": true,
+    "**/.venv/**": true,
+    "**/.elixir_ls/**": true
+  },
+
+  // Match the project's line-length conventions (Ruff: 100, Rust default 100).
+  "editor.rulers": [100],
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true
+}

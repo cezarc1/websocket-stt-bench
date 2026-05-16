@@ -1,0 +1,63 @@
+{{- if .Values.inferbench.enabled }}
+{{- range .Values.inferbench.runs }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: stt-inferbench-{{ .name }}
+  labels:
+    {{- include "stt-bench.labels" $ | nindent 4 }}
+    app: stt-benchmark
+    component: inferbench
+spec:
+  suspend: {{ default true .suspend }}
+  backoffLimit: 0
+  ttlSecondsAfterFinished: {{ $.Values.inferbench.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        app: stt-benchmark
+        component: inferbench
+    spec:
+      {{- include "stt-bench.imagePullSecrets" $ | nindent 6 }}
+      securityContext:
+        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+      restartPolicy: Never
+      containers:
+        - name: inferbench
+          image: {{ include "stt-bench.image" (list $ $.Values.inferbench.image) }}
+          imagePullPolicy: {{ $.Values.images.pullPolicy }}
+          command: ["/usr/local/bin/stt-inferbench"]
+          args:
+            - --url
+            - {{ $.Values.inferbench.targetUrl }}
+            - --rps
+            - {{ .rps | quote }}
+            - --concurrency
+            - {{ .concurrency | quote }}
+            - --duration-secs
+            - {{ .durationSecs | quote }}
+            - --clients
+            - {{ .clients | quote }}
+            - --payload-frames
+            - {{ .payloadFrames | quote }}
+            - --timeout-ms
+            - {{ .timeoutMs | quote }}
+            - --connect-timeout-ms
+            - {{ .connectTimeoutMs | quote }}
+          resources:
+            {{- toYaml $.Values.inferbench.resources | nindent 12 }}
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "true"]
+            periodSeconds: 30
+            timeoutSeconds: 1
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "true"]
+            periodSeconds: 30
+            timeoutSeconds: 1
+          securityContext:
+            {{- toYaml $.Values.containerSecurityContext | nindent 12 }}
+---
+{{- end }}
+{{- end }}

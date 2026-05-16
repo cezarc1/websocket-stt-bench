@@ -1,0 +1,50 @@
+name: Publish Helm chart
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/chart.yml"
+      - "charts/stt-bench/**"
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+    paths:
+      - ".github/workflows/chart.yml"
+      - "charts/stt-bench/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  chart:
+    name: Lint and publish stt-bench chart
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint chart
+        run: helm lint charts/stt-bench
+
+      - name: Package chart
+        run: helm package charts/stt-bench --destination /tmp/charts
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login "${REGISTRY}" \
+              --username "${{ github.actor }}" \
+              --password-stdin
+
+      - name: Push chart
+        if: github.event_name != 'pull_request'
+        run: helm push /tmp/charts/stt-bench-*.tgz "oci://${REGISTRY}/${{ github.repository }}/charts"

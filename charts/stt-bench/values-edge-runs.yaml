@@ -1,0 +1,110 @@
+loadgen:
+  runs:
+    - name: rust-3450
+      gateway: rust
+      serviceName: rust-axum-1vcpu-k8s
+      sessions: 3450
+      outputPrefix: rust-axum-1vcpu-3450
+      suspend: true
+    - name: rust-4250
+      gateway: rust
+      serviceName: rust-axum-2vcpu-k8s
+      sessions: 4250
+      outputPrefix: rust-axum-2vcpu-4250
+      suspend: true
+    - name: rust-4375
+      gateway: rust
+      serviceName: rust-axum-2vcpu-k8s
+      sessions: 4375
+      outputPrefix: rust-axum-2vcpu-4375
+      suspend: true
+    - name: elixir-1250
+      gateway: elixir
+      serviceName: elixir-phoenix-1vcpu-k8s
+      sessions: 1250
+      outputPrefix: elixir-phoenix-1vcpu-1250
+      suspend: true
+    - name: elixir-2250
+      gateway: elixir
+      serviceName: elixir-phoenix-2vcpu-k8s
+      sessions: 2250
+      outputPrefix: elixir-phoenix-2vcpu-2250
+      suspend: true
+    - name: python-ft-180
+      gateway: pythonFt
+      serviceName: python-fastapi-ft-1vcpu-k8s
+      sessions: 180
+      outputPrefix: python-fastapi-ft-1vcpu-180
+      suspend: true
+    - name: python-ft-205
+      gateway: pythonFt
+      serviceName: python-fastapi-ft-2vcpu-k8s
+      sessions: 205
+      outputPrefix: python-fastapi-ft-2vcpu-205
+      suspend: true
+    - name: python-gil-1100
+      gateway: pythonGil
+      serviceName: python-fastapi-gil-1vcpu-k8s
+      sessions: 1100
+      outputPrefix: python-fastapi-gil-1vcpu-1100
+      suspend: true
+    - name: typescript-bun-2550
+      gateway: typescriptBun
+      serviceName: typescript-bun-1vcpu-2gib-k8s
+      sessions: 2550
+      outputPrefix: typescript-bun-1vcpu-2gib-2550
+      suspend: true
+    - name: typescript-bun-2600
+      gateway: typescriptBun
+      serviceName: typescript-bun-1vcpu-2gib-k8s
+      sessions: 2600
+      outputPrefix: typescript-bun-1vcpu-2gib-2600
+      suspend: true
+    - name: go-nethttp-2500
+      gateway: goNethttp
+      serviceName: go-nethttp-1vcpu-2gib-k8s
+      sessions: 2500
+      outputPrefix: go-nethttp-1vcpu-2gib-2500
+      suspend: true
+    - name: go-nethttp-2600
+      gateway: goNethttp
+      serviceName: go-nethttp-1vcpu-2gib-k8s
+      sessions: 2600
+      outputPrefix: go-nethttp-1vcpu-2gib-2600
+      suspend: true
+    - name: go-nethttp-2vcpu-4000
+      gateway: goNethttp2cpu
+      serviceName: go-nethttp-2vcpu-2gib-k8s
+      sessions: 4000
+      outputPrefix: go-nethttp-2vcpu-2gib-4000
+      suspend: true
+    - name: go-nethttp-2vcpu-4050
+      gateway: goNethttp2cpu
+      serviceName: go-nethttp-2vcpu-2gib-k8s
+      sessions: 4050
+      outputPrefix: go-nethttp-2vcpu-2gib-4050
+      suspend: true
+    - name: java-helidon-nima-2600
+      gateway: javaHelidonNima
+      serviceName: java-helidon-nima-1vcpu-2gib-k8s
+      sessions: 2600
+      outputPrefix: java-helidon-nima-1vcpu-2gib-2600
+      suspend: true
+    - name: java-helidon-nima-2625
+      gateway: javaHelidonNima
+      serviceName: java-helidon-nima-1vcpu-2gib-k8s
+      sessions: 2625
+      outputPrefix: java-helidon-nima-1vcpu-2gib-2625
+      suspend: true
+    - name: java-helidon-nima-2vcpu-3750
+      gateway: javaHelidonNima2cpu
+      serviceName: java-helidon-nima-2vcpu-2gib-k8s
+      sessions: 3750
+      outputPrefix: java-helidon-nima-2vcpu-2gib-3750
+      suspend: true
+    - name: java-helidon-nima-2vcpu-3800
+      gateway: javaHelidonNima2cpu
+      serviceName: java-helidon-nima-2vcpu-2gib-k8s
+      sessions: 3800
+      outputPrefix: java-helidon-nima-2vcpu-2gib-3800
+      suspend: true
