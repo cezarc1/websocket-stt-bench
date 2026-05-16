@@ -36,7 +36,8 @@ val create
   -> outbound:string Pipe.Writer.t
   -> t
 
-(** Validate a freshly-received binary frame (the raw [Ws_frame] string) and enqueue it. *)
+(** Validate a freshly-received binary frame (the raw [Websocket_frame] string) and
+    enqueue it. *)
 val on_binary : t -> string -> close_action
 
 (** Start the periodic flush loop. Returns when the outbound pipe closes. *)

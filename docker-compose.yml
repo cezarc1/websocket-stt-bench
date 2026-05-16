@@ -155,9 +155,9 @@ x-ocaml-env: &ocaml-env
   CPU_PASSES: "4"
   MODEL_DELAY_MS: "75"
   # Accepted for env parity with other gateways but currently a NO-OP:
-  # the OCaml inference client opens a fresh HTTP/1.1 connection per
-  # flush over raw Async.Tcp. Becomes load-bearing when keep-alive
-  # pooling (and eventually h2c) lands.
+  # the OCaml client already uses one persistent keep-alive HTTP/1.1
+  # connection per session over raw Async.Tcp, and the
+  # one-inflight-per-connection invariant makes a pool pointless.
   INFERENCE_HTTP_CLIENTS: "4"
   FLUSH_INTERVAL_MS: "1000"
   FLUSH_PHASE_JITTER_MS: "1000"

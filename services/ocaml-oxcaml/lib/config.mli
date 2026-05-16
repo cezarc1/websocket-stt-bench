@@ -5,9 +5,12 @@
     FLUSH_INTERVAL_MS, FLUSH_PHASE_JITTER_MS, CPU_PASSES, MODEL_DELAY_MS.
 
     NOTE: [inference_http_clients] and [worker_threads] are accepted for parity with the
-    cross-runtime env contract but are currently no-ops: the inference path opens a fresh
-    TCP connection per flush, and Async is single-domain. Both will start affecting
-    behaviour when keep-alive pooling and [janestreet/parallel] respectively land. *)
+    cross-runtime env contract but are currently no-ops. The inference path already uses a
+    persistent per-session keep-alive connection; the one-inflight-per-connection
+    invariant makes requests on it strictly sequential, so a multi-connection pool would
+    add nothing — hence [inference_http_clients] stays a no-op. [worker_threads] is a
+    no-op while Async is single-domain; it will start mattering when [janestreet/parallel]
+    lands. *)
 
 type t =
   { port : int

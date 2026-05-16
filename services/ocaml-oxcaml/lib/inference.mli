@@ -2,23 +2,19 @@ open! Core
 
 (** Inference-server HTTP client.
 
-    Posts a concatenated PCM batch to the shared inference server's [/infer] endpoint with
-    the [x-cpu-passes] header and decodes the response. {!send} always returns a [Token.t]
-    — even on error — so the session can mint a fresh capability and keep serving the
-    client instead of wedging on a transient inference failure.
+    Posts a PCM batch to the shared inference server's [/infer] endpoint with the
+    [x-cpu-passes] header (HTTP/1.1, Content-Length framed, over raw [Async.Tcp]) and
+    decodes the response. {!send} always returns a [Token.t] — even on error — so the
+    session can mint a fresh capability and keep serving the client instead of wedging on
+    a transient inference failure.
 
-    Each session owns one {!conn}: a persistent HTTP/1.1 keep-alive connection reused
-    across flushes. The per-connection one-inflight-inference invariant means requests on
-    a [conn] are strictly sequential, so a single long-lived connection per session is
-    both correct and optimal — it removes the per-flush TCP connect + DNS + handshake that
-    otherwise caps the gateway on connection churn. A dead/closed keep-alive connection is
-    transparently redialed (one retry) before a flush is reported as an error.
-
-    Every request is bounded by {!request_timeout}.
-
-    Transport note: HTTP/1.1 (Content-Length framed) over raw [Async.Tcp]. The inference
-    server (axum/hyper) speaks HTTP/1.1 keep-alive, so protocol semantics are correct. h2c
-    is future work. *)
+    Each session owns one {!conn}: a persistent keep-alive socket reused across flushes.
+    The one-inflight-per-connection invariant makes requests on a [conn] strictly
+    sequential, so one long-lived socket per session is both correct and optimal (no pool)
+    and removes the per-flush connect+handshake that otherwise caps the gateway on
+    connection churn. A stale/closed socket is transparently redialed once before a flush
+    is reported as an error. Every request is bounded by {!request_timeout}. h2c is future
+    work. *)
 
 type t
 
@@ -31,13 +27,12 @@ type conn
 val create_conn : unit -> conn
 val close_conn : conn -> unit Async.Deferred.t
 
-(** [stage] / [kind] use the wire-shared vocabulary from
-    [services/rust-axum/src/protocol.rs] (ErrorStage / ErrorKind):
-    - stage ∈ [{inference_request, inference_response_parse}]
-    - kind ∈ [{timeout, connection_reset, http_5xx, http_429, parse_error}] *)
+(** [stage] / [kind] are the wire-shared error categories ({!Protocol.Error_stage} /
+    {!Protocol.Error_kind}); they flatten to the strings the Rust protocol defines only at
+    serialization. *)
 type error =
-  { stage : string
-  ; kind : string
+  { stage : Protocol.Error_stage.t
+  ; kind : Protocol.Error_kind.t
   ; message : string
   ; status : int option
   }

@@ -1,4 +1,4 @@
 (test
  (name test_stt_ocaml_oxcaml)
- (libraries alcotest core stt_ocaml_oxcaml yojson)
+ (libraries alcotest core async stt_ocaml_oxcaml yojson)
  (preprocess (pps ppx_jane)))

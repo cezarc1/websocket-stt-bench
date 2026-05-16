@@ -8,6 +8,27 @@
     - [Partial.to_yojson] emits exactly the 14 fields the conformance
       [partial_schema_and_golden] case enforces. *)
 
+(** Wire-shared error vocabulary (mirrors [loadgen/rust/src/protocol.rs] ErrorStage /
+    ErrorKind). Sum types internally; {!to_wire} produces the exact wire string. *)
+module Error_stage : sig
+  type t =
+    | Inference_request
+    | Inference_response_parse
+
+  val to_wire : t -> string
+end
+
+module Error_kind : sig
+  type t =
+    | Timeout
+    | Connection_reset
+    | Http_5xx
+    | Http_429
+    | Parse_error
+
+  val to_wire : t -> string
+end
+
 module Start_message : sig
   type t = { type_ : string }
 
@@ -55,8 +76,8 @@ end
 module Error : sig
   type t =
     { type_ : string
-    ; stage : string
-    ; kind : string
+    ; stage : Error_stage.t
+    ; kind : Error_kind.t
     ; message : string
     ; oldest_frame_seq : int
     ; newest_frame_seq : int

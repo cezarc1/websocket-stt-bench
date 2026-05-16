@@ -8,7 +8,7 @@ type close_action =
       ; reason : string
       }
 
-(* [payload] is the [Ws_frame] string verbatim — no Bigstring conversion on the 50
+(* [payload] is the [Websocket_frame] string verbatim — no Bigstring conversion on the 50
    fps/session receive path. At flush the frame strings are written straight to the
    inference socket (no concat buffer). *)
 type frame =
@@ -50,10 +50,46 @@ let on_binary (t : t) (payload : string) =
     Continue)
 ;;
 
-let drain_buffer t =
-  let snapshot = Queue.to_list t.buffer in
-  Queue.clear t.buffer;
-  snapshot
+type drained =
+  { body : string list (* frame payloads, oldest-first *)
+  ; body_len : int
+  ; frame_count : int
+  ; oldest_seq : int
+  ; newest_seq : int
+  ; oldest_received_at : Time_ns.t
+  ; newest_received_at : Time_ns.t
+  }
+
+(* One pass over the buffer instead of to_list + map + fold + last_exn + length: this is
+   the measured CPU-bound hot path (~2k flushes/s on the single Async domain). Frames
+   enqueue in receive order, so the first folded frame is oldest and the last is newest. *)
+let drain t : drained option =
+  match Queue.peek t.buffer with
+  | None -> None
+  | Some first ->
+    let acc =
+      Queue.fold
+        t.buffer
+        ~init:
+          { body = []
+          ; body_len = 0
+          ; frame_count = 0
+          ; oldest_seq = first.seq
+          ; newest_seq = first.seq
+          ; oldest_received_at = first.received_at
+          ; newest_received_at = first.received_at
+          }
+        ~f:(fun acc f ->
+          { acc with
+            body = f.payload :: acc.body
+          ; body_len = acc.body_len + String.length f.payload
+          ; frame_count = acc.frame_count + 1
+          ; newest_seq = f.seq
+          ; newest_received_at = f.received_at
+          })
+    in
+    Queue.clear t.buffer;
+    Some { acc with body = List.rev acc.body }
 ;;
 
 let build_partial
@@ -96,14 +132,17 @@ let build_error
   ~inference_elapsed_ms
   : Protocol.Error.t
   =
-  (* Mirrors Rust/Go: parse errors and 4xx (except 429) are deterministic client/config
-     bugs — not worth retrying. timeout, connection_reset, 429, and 5xx are transient. *)
+  (* Mirrors Rust/Go: a parse error is a deterministic client/config bug — never retry.
+     timeout / connection_reset / 429 are transient. [Inference] lumps every non-200,
+     non-429 status into [Http_5xx], so the actual status is consulted there to keep a
+     deterministic 4xx (≠429) non-retryable, exactly as before this was a sum type. *)
   let retryable =
     match err.kind with
-    | "parse_error" -> false
-    | _ ->
+    | Protocol.Error_kind.Parse_error -> false
+    | Timeout | Connection_reset | Http_429 -> true
+    | Http_5xx ->
       (match err.status with
-       | Some s -> s = 429 || s >= 500
+       | Some s -> s >= 500
        | None -> true)
   in
   { type_ = "error"
@@ -148,23 +187,21 @@ let perform_flush t ~expected_at =
   match Mvar.take_now t.cap_mvar with
   | None -> return ()
   | Some capability ->
-    let frames = drain_buffer t in
-    (match frames with
-     | [] ->
+    (match drain t with
+     | None ->
        Mvar.set t.cap_mvar capability;
        return ()
-     | oldest_frame :: _ ->
-       let newest_frame = List.last_exn frames in
-       let oldest_seq = oldest_frame.seq in
-       let newest_seq = newest_frame.seq in
-       let frame_count = List.length frames in
-       let body = List.map frames ~f:(fun f -> f.payload) in
-       let audio_bytes = List.fold body ~init:0 ~f:(fun acc s -> acc + String.length s) in
+     | Some d ->
        let emit s =
          if Pipe.is_closed t.outbound then return () else Pipe.write t.outbound s
        in
        let inference_start = Time_ns.now () in
-       Inference.send t.inference ~conn:t.inf_conn ~capability ~body ~body_len:audio_bytes
+       Inference.send
+         t.inference
+         ~conn:t.inf_conn
+         ~capability
+         ~body:d.body
+         ~body_len:d.body_len
        >>= fun outcome ->
        let inference_elapsed_ms = ms_since inference_start in
        let%bind () =
@@ -173,9 +210,9 @@ let perform_flush t ~expected_at =
            let partial =
              build_partial
                ~infer
-               ~oldest_seq
-               ~newest_seq
-               ~frame_count
+               ~oldest_seq:d.oldest_seq
+               ~newest_seq:d.newest_seq
+               ~frame_count:d.frame_count
                ~flush_lateness_ms
                ~cpu_passes:t.config.cpu_passes
                ~model_delay_ms:t.config.model_delay_ms
@@ -184,20 +221,20 @@ let perform_flush t ~expected_at =
          | Error err ->
            Log.Global.error
              "inference error stage=%s kind=%s status=%s msg=%s"
-             err.stage
-             err.kind
+             (Protocol.Error_stage.to_wire err.stage)
+             (Protocol.Error_kind.to_wire err.kind)
              (Option.value_map err.status ~default:"-" ~f:Int.to_string)
              err.message;
            let envelope =
              build_error
                t
                ~err
-               ~oldest_seq
-               ~newest_seq
-               ~frame_count
-               ~audio_bytes
-               ~oldest_age_ms:(ms_since oldest_frame.received_at)
-               ~newest_age_ms:(ms_since newest_frame.received_at)
+               ~oldest_seq:d.oldest_seq
+               ~newest_seq:d.newest_seq
+               ~frame_count:d.frame_count
+               ~audio_bytes:d.body_len
+               ~oldest_age_ms:(ms_since d.oldest_received_at)
+               ~newest_age_ms:(ms_since d.newest_received_at)
                ~flush_lateness_ms
                ~inference_elapsed_ms
            in

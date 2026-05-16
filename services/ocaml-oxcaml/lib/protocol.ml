@@ -2,6 +2,38 @@ open! Core
 
 let frame_bytes = 640
 
+(* [stage]/[kind] are the wire-shared error vocabulary (see [loadgen/rust/src/protocol.rs]
+   ErrorStage / ErrorKind). They are sum types internally so the gateway can never emit a
+   typo'd category, and are flattened to the exact wire strings only here at the protocol
+   boundary. *)
+module Error_stage = struct
+  type t =
+    | Inference_request
+    | Inference_response_parse
+
+  let to_wire = function
+    | Inference_request -> "inference_request"
+    | Inference_response_parse -> "inference_response_parse"
+  ;;
+end
+
+module Error_kind = struct
+  type t =
+    | Timeout
+    | Connection_reset
+    | Http_5xx
+    | Http_429
+    | Parse_error
+
+  let to_wire = function
+    | Timeout -> "timeout"
+    | Connection_reset -> "connection_reset"
+    | Http_5xx -> "http_5xx"
+    | Http_429 -> "http_429"
+    | Parse_error -> "parse_error"
+  ;;
+end
+
 module Start_message = struct
   type t = { type_ : string }
 
@@ -185,8 +217,8 @@ end
 module Error = struct
   type t =
     { type_ : string
-    ; stage : string
-    ; kind : string
+    ; stage : Error_stage.t
+    ; kind : Error_kind.t
     ; message : string
     ; oldest_frame_seq : int
     ; newest_frame_seq : int
@@ -215,8 +247,8 @@ module Error = struct
   let to_yojson (t : t) : Yojson.Safe.t =
     `Assoc
       [ "type", `String t.type_
-      ; "stage", `String t.stage
-      ; "kind", `String t.kind
+      ; "stage", `String (Error_stage.to_wire t.stage)
+      ; "kind", `String (Error_kind.to_wire t.kind)
       ; "message", `String t.message
       ; "oldest_frame_seq", `Int t.oldest_frame_seq
       ; "newest_frame_seq", `Int t.newest_frame_seq
