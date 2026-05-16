@@ -17,6 +17,7 @@ type frame =
 type t =
   { config : Config.t
   ; inference : Inference.t
+  ; inf_conn : Inference.conn
   ; outbound : string Pipe.Writer.t
   ; buffer : frame Queue.t
   ; mutable seq : int
@@ -26,7 +27,14 @@ type t =
 let create ~config ~inference ~outbound =
   let cap_mvar = Mvar.create () in
   Mvar.set cap_mvar (Inflight_capability.create_for_session ());
-  { config; inference; outbound; buffer = Queue.create (); seq = 0; cap_mvar }
+  { config
+  ; inference
+  ; inf_conn = Inference.create_conn ()
+  ; outbound
+  ; buffer = Queue.create ()
+  ; seq = 0
+  ; cap_mvar
+  }
 ;;
 
 let on_binary (t : t) payload =
@@ -168,7 +176,7 @@ let perform_flush t ~expected_at =
          if Pipe.is_closed t.outbound then return () else Pipe.write t.outbound s
        in
        let inference_start = Time_ns.now () in
-       Inference.send t.inference ~capability ~payload
+       Inference.send t.inference ~conn:t.inf_conn ~capability ~payload
        >>= fun outcome ->
        let inference_elapsed_ms = ms_since inference_start in
        let%bind () =
@@ -216,7 +224,7 @@ let run_flush_loop t =
   let step = Time_ns.Span.of_ms (Float.of_int t.config.flush_interval_ms) in
   let rec loop expected_at =
     if Pipe.is_closed t.outbound
-    then return ()
+    then Inference.close_conn t.inf_conn
     else (
       let now = Time_ns.now () in
       let wait =
