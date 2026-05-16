@@ -101,6 +101,10 @@ module Partial = struct
     ; inflight_model_jobs : int
     }
 
+  (* Kept for the exact-field-set unit test; the runtime hot path uses {!to_string} below,
+     which writes directly into a [Buffer] and skips the 14-node Yojson tree + generic
+     serializer. At the measured CPU-bound ceiling this is ~2k partials/s on the single
+     Async domain, so the per-partial allocation matters. *)
   let to_yojson (t : t) : Yojson.Safe.t =
     `Assoc
       [ "type", `String t.type_
@@ -120,7 +124,62 @@ module Partial = struct
       ]
   ;;
 
-  let to_string t = Yojson.Safe.to_string (to_yojson t)
+  (* JSON string escaping for the transcript. The inference stub's vocabulary is plain
+     ASCII words, but escape defensively so a future transcript can't produce invalid
+     JSON. *)
+  let add_json_string buf s =
+    Buffer.add_char buf '"';
+    String.iter s ~f:(fun c ->
+      match c with
+      | '"' -> Buffer.add_string buf "\\\""
+      | '\\' -> Buffer.add_string buf "\\\\"
+      | '\n' -> Buffer.add_string buf "\\n"
+      | '\r' -> Buffer.add_string buf "\\r"
+      | '\t' -> Buffer.add_string buf "\\t"
+      | c when Char.to_int c < 0x20 ->
+        Buffer.add_string buf (sprintf "\\u%04x" (Char.to_int c))
+      | c -> Buffer.add_char buf c);
+    Buffer.add_char buf '"'
+  ;;
+
+  (* [%.17g] round-trips an IEEE double losslessly and is a valid JSON number;
+     rms/flush_lateness_ms are always finite here. *)
+  let add_float buf f = Buffer.add_string buf (sprintf "%.17g" f)
+  let add_int buf i = Buffer.add_string buf (Int.to_string i)
+
+  let to_string (t : t) =
+    let b = Buffer.create 256 in
+    Buffer.add_string b {|{"type":|};
+    add_json_string b t.type_;
+    Buffer.add_string b {|,"oldest_frame_seq":|};
+    add_int b t.oldest_frame_seq;
+    Buffer.add_string b {|,"newest_frame_seq":|};
+    add_int b t.newest_frame_seq;
+    Buffer.add_string b {|,"frames":|};
+    add_int b t.frames;
+    Buffer.add_string b {|,"rms":|};
+    add_float b t.rms;
+    Buffer.add_string b {|,"zero_crossings":|};
+    add_int b t.zero_crossings;
+    Buffer.add_string b {|,"checksum":|};
+    add_int b t.checksum;
+    Buffer.add_string b {|,"samples":|};
+    add_int b t.samples;
+    Buffer.add_string b {|,"transcript":|};
+    add_json_string b t.transcript;
+    Buffer.add_string b {|,"audio_bytes":|};
+    add_int b t.audio_bytes;
+    Buffer.add_string b {|,"cpu_passes":|};
+    add_int b t.cpu_passes;
+    Buffer.add_string b {|,"model_delay_ms":|};
+    add_int b t.model_delay_ms;
+    Buffer.add_string b {|,"flush_lateness_ms":|};
+    add_float b t.flush_lateness_ms;
+    Buffer.add_string b {|,"inflight_model_jobs":|};
+    add_int b t.inflight_model_jobs;
+    Buffer.add_char b '}';
+    Buffer.contents b
+  ;;
 end
 
 module Error = struct

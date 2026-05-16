@@ -90,6 +90,61 @@ let test_partial_serializes_exact_field_set () =
   | _ -> Alcotest.fail "Partial.to_yojson must return Assoc"
 ;;
 
+(* The hand-rolled Partial.to_string must round-trip to the same 14 fields/values as the
+   Yojson reference path. *)
+let test_partial_to_string_roundtrips () =
+  let partial : P.Partial.t =
+    { type_ = "partial"
+    ; oldest_frame_seq = 1
+    ; newest_frame_seq = 50
+    ; frames = 50
+    ; rms = 2425.5023191083533
+    ; zero_crossings = 7
+    ; checksum = 1745339397
+    ; samples = 64000
+    ; transcript = "now"
+    ; audio_bytes = 32000
+    ; cpu_passes = 4
+    ; model_delay_ms = 75
+    ; flush_lateness_ms = 35.0
+    ; inflight_model_jobs = 0
+    }
+  in
+  let direct = P.Partial.to_string partial in
+  match Yojson.Safe.from_string direct with
+  | exception e -> Alcotest.failf "to_string not valid JSON: %s" (Exn.to_string e)
+  | `Assoc fields ->
+    let ref_fields =
+      match P.Partial.to_yojson partial with
+      | `Assoc f -> f
+      | _ -> []
+    in
+    let norm l = List.sort l ~compare:(fun (a, _) (b, _) -> String.compare a b) in
+    let keys l = List.map l ~f:fst |> List.sort ~compare:String.compare in
+    Alcotest.(check (list string))
+      "to_string keys == to_yojson keys"
+      (keys ref_fields)
+      (keys fields);
+    let find l k = List.Assoc.find_exn l k ~equal:String.equal in
+    List.iter (norm ref_fields) ~f:(fun (k, v) ->
+      let got = find fields k in
+      let same =
+        match v, got with
+        | `Float a, `Float b -> Float.( <= ) (Float.abs (a -. b)) 1e-6
+        | `Float a, `Int b | `Int b, `Float a ->
+          Float.( <= ) (Float.abs (a -. Float.of_int b)) 1e-6
+        | a, b -> Poly.equal a b
+      in
+      if not same
+      then
+        Alcotest.failf
+          "field %s mismatch: ref=%s got=%s"
+          k
+          (Yojson.Safe.to_string v)
+          (Yojson.Safe.to_string got))
+  | _ -> Alcotest.fail "to_string must be a JSON object"
+;;
+
 let test_runtime_version_assertion () =
   Alcotest.(check string)
     "expected_ocaml_version"
@@ -133,6 +188,10 @@ let () =
             "Partial: serializes exact 14-field set"
             `Quick
             test_partial_serializes_exact_field_set
+        ; test_case
+            "Partial: to_string round-trips to_yojson"
+            `Quick
+            test_partial_to_string_roundtrips
         ] )
     ; ( "runtime"
       , [ test_case
