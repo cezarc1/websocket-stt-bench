@@ -18,6 +18,12 @@ The output for a new runtime is three artifacts, in priority order:
    This is a first-class result, not a footnote: "perf per LOC" and
    "agent-debuggability" are co-equal axes of this benchmark.
 
+**Reference example — what "done" looks like:**
+[PR #1](https://github.com/cezarc1/websocket-stt-bench/pull/1) (the OCaml/OxCaml
+run this playbook was extracted from). Use its PR body as the template for the
+final artifact: the summary, the checked test-plan, the `confirmed ↔ borderline
+↔ first-solid-fail` bracket, and a filled-in Agent Build Log.
+
 ---
 
 ## The two contracts (read first, never violate)
@@ -219,7 +225,8 @@ stt_analysis.comparison_chart_gen --out ../docs/loc-vs-capacity.png`.
   things derivable from code or git.
 - Run the full `just check` gate.
 - Propose the PR (title + summary + the bracket + the Agent Build Log
-  summary). **Open it only after [ASK].**
+  summary), structured like the reference [PR #1](https://github.com/cezarc1/websocket-stt-bench/pull/1).
+  **Open it only after [ASK].**
 
 ---
 
