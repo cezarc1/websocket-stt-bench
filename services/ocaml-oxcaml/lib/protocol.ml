@@ -234,15 +234,8 @@ module Error = struct
     ; retryable : bool
     }
 
-  let float_or_null = function
-    | None -> `Null
-    | Some f -> `Float f
-  ;;
-
-  let int_or_null = function
-    | None -> `Null
-    | Some i -> `Int i
-  ;;
+  let float_or_null = Option.value_map ~default:`Null ~f:(fun f -> `Float f)
+  let int_or_null = Option.value_map ~default:`Null ~f:(fun i -> `Int i)
 
   let to_yojson (t : t) : Yojson.Safe.t =
     `Assoc

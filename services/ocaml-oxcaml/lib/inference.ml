@@ -177,18 +177,24 @@ let dial t = Tcp.connect t.where >>| fun (_sock, r, w) -> r, w
    again — there is no later connection for it to clobber. *)
 let do_request t conn ~epoch ~body ~body_len =
   let current () = conn.epoch = epoch in
+  (* Publish a freshly dialed socket for reuse only if this attempt still owns [conn]; the
+     [current ()] check and the [conn.rw] write are adjacent with no intervening bind —
+     that synchronicity is the epoch-fence invariant. *)
+  let publish_or_abandon rw =
+    if current ()
+    then (
+      conn.rw <- Some rw;
+      return (`Use rw))
+    else (
+      let%bind () = close_rw rw in
+      return `Abandoned)
+  in
   let acquire () =
     match conn.rw with
     | Some rw -> return (`Use rw)
     | None ->
       let%bind rw = dial t in
-      if current ()
-      then (
-        conn.rw <- Some rw;
-        return (`Use rw))
-      else (
-        let%bind () = close_rw rw in
-        return `Abandoned)
+      publish_or_abandon rw
   in
   let redial () =
     if not (current ())
@@ -196,13 +202,7 @@ let do_request t conn ~epoch ~body ~body_len =
     else (
       let%bind () = close_conn conn in
       let%bind rw = dial t in
-      if current ()
-      then (
-        conn.rw <- Some rw;
-        return (`Use rw))
-      else (
-        let%bind () = close_rw rw in
-        return `Abandoned))
+      publish_or_abandon rw)
   in
   match%bind acquire () with
   | `Abandoned -> return (connection_reset "inference connection abandoned")
