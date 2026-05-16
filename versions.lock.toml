@@ -142,3 +142,60 @@ clap = "4.6.1"
 tokio_tungstenite = "0.29.0"
 hdrhistogram = "7.5.4"
 anyhow = "1.0.102"
+
+[ocaml]
+# OxCaml is Jane Street's experimental OCaml compiler fork. Per
+# https://oxcaml.org/get-oxcaml/ it ships as an opam switch built from source
+# from the oxcaml/opam-repository repo. We pin both the switch name and the
+# repo commit so reproducibility is independent of "main" drift.
+#
+# To refresh: `git ls-remote https://github.com/oxcaml/opam-repository.git HEAD`
+# then update `oxcaml_repo_commit`.
+opam = "2.5.1"
+oxcaml_switch = "5.2.0+ox"
+# Use a real commit SHA in production. Defaults to main for first-time setup.
+oxcaml_repo_commit = "main"
+
+[ocaml.dependencies]
+# OxCaml's opam-repository pins many of these to "+ox" variants whose
+# version numbers diverge from upstream (e.g., alcotest 1.9.0+ox,
+# parallel v0.18~preview.130.91+190). We don't pin specific versions
+# here: opam resolves to the OxCaml-blessed flavor automatically and
+# pinning to upstream numbers like v0.17.0 just fails resolution.
+# The package set is the contract; the versions are whatever the pinned
+# `oxcaml_repo_commit` ships at install time.
+ocamlformat = "latest"
+merlin = "latest"
+ocaml_lsp_server = "latest"
+dune = "latest"
+base = "latest"
+core = "latest"
+core_unix = "latest"
+async = "latest"
+parallel = "latest"
+yojson = "latest"
+ppx_jane = "latest"
+# Note: we used to depend on websocket-async + cohttp, but the transitive
+# `digestif` dep doesn't build on the OxCaml 5.2.0+ox switch invariant
+# (mode-system mismatch in baijiu_rmd160.ml). Both the HTTP/1.1 server +
+# inference client and the WebSocket framing/handshake are now hand-rolled
+# on top of raw `Async.Tcp` (see lib/server.ml, lib/ws_frame.ml,
+# lib/inference.ml). RFC 6455 framing is ~200 LOC.
+# HTTP/1.1 client for the inference POST. The inference server (axum)
+# accepts both HTTP/1.1 and HTTP/2 cleartext on the same listener, so we
+# get correct protocol semantics on the simpler transport while keeping
+# h2c as a future optimization.
+# Test harness. `alcotest-async` is intentionally NOT included: it pins
+# core_kernel/core_unix to versions older than what the OxCaml switch
+# invariant ships, causing a hard opam conflict. Tests use plain Alcotest
+# with `Thread_safe.block_on_async_exn` if they need Async semantics.
+alcotest = "1.8.0"
+
+[containers.ocaml]
+# ocaml/opam base + debian-slim runtime. The OxCaml switch is built from
+# source inside the build stage; on a cold build that's a 15+ minute step,
+# but it caches cleanly across rebuilds that don't change the switch.
+# TODO: pin both images by sha256 digest before merging (run
+# `docker pull ocaml/opam:debian-12-ocaml-5.2 && docker inspect --format='{{index .RepoDigests 0}}' ...`).
+opam_debian_12 = "ocaml/opam:debian-12-ocaml-5.2"
+debian_slim = "debian:12-slim"

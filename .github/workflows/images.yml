@@ -107,6 +107,13 @@ jobs:
             dockerfile: docker/cpp23-uwebsockets.Dockerfile
             build_args: |
               BAZELISK_VERSION=1.29.0
+          - image: ocaml-oxcaml
+            dockerfile: docker/ocaml-oxcaml.Dockerfile
+            build_args: |
+              OPAM_BASE_IMAGE=ocaml/opam:debian-12-ocaml-5.2
+              DEBIAN_RUNTIME_IMAGE=debian:12-slim
+              OXCAML_SWITCH=5.2.0+ox
+              OXCAML_REPO_COMMIT=main
           - image: loadgen
             dockerfile: docker/loadgen-rust.Dockerfile
             build_args: ""

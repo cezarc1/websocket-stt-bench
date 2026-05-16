@@ -11,6 +11,7 @@ doctor:
     bash scripts/ensure-maven.sh
     bash scripts/ensure-sbt.sh
     bash scripts/ensure-bazelisk.sh
+    bash scripts/ensure-opam.sh
     bash scripts/doctor.sh
     bash scripts/check-docker-tags.sh
 
@@ -34,6 +35,14 @@ ensure-sbt:
 
 ensure-bazelisk:
     bash scripts/ensure-bazelisk.sh
+
+ensure-opam:
+    bash scripts/ensure-opam.sh
+
+# Slow on first run (10-20 min): builds the OxCaml compiler from source.
+# Skipped by `just doctor` because that recipe should stay fast.
+ensure-oxcaml-switch: ensure-opam
+    bash scripts/ensure-oxcaml-switch.sh
 
 py-lock: ensure-uv
     bash scripts/py-sync.sh lock
@@ -168,7 +177,36 @@ cpp-check: ensure-bazelisk
 cpp-test: ensure-bazelisk
     cd services/cpp23-uwebsockets && ../../.tools/bin/bazel test //...
 
-check: doctor python-check analysis-check ts-check go-check elixir-check rust-check java-check scala-check cpp-check
+# OCaml / OxCaml gateway. Local builds run inside the OxCaml opam switch
+# created by `just ensure-oxcaml-switch`. The Dockerfile reproduces this
+# environment hermetically for `just compose-build`.
+ocaml-deps: ensure-oxcaml-switch
+    cd services/ocaml-oxcaml && opam exec --switch "$(awk -F\" '/oxcaml_switch =/{print $2; exit}' ../../versions.lock.toml)" -- dune build @check --root .
+
+ocaml-check: ensure-oxcaml-switch
+    cd services/ocaml-oxcaml && opam exec --switch "$(awk -F\" '/oxcaml_switch =/{print $2; exit}' ../../versions.lock.toml)" -- dune build @fmt --root .
+    cd services/ocaml-oxcaml && opam exec --switch "$(awk -F\" '/oxcaml_switch =/{print $2; exit}' ../../versions.lock.toml)" -- dune build --profile release --root .
+    cd services/ocaml-oxcaml && opam exec --switch "$(awk -F\" '/oxcaml_switch =/{print $2; exit}' ../../versions.lock.toml)" -- dune runtest --root .
+
+ocaml-test: ensure-oxcaml-switch
+    cd services/ocaml-oxcaml && opam exec --switch "$(awk -F\" '/oxcaml_switch =/{print $2; exit}' ../../versions.lock.toml)" -- dune runtest --root .
+
+ocaml-fmt: ensure-oxcaml-switch
+    cd services/ocaml-oxcaml && opam exec --switch "$(awk -F\" '/oxcaml_switch =/{print $2; exit}' ../../versions.lock.toml)" -- dune build @fmt --auto-promote --root .
+
+# Build the slow OxCaml-switch+deps base image once and tag it locally so the
+# gateway Dockerfile can FROM it. Re-run only when bumping
+# `oxcaml_repo_commit` in versions.lock.toml or changing the opam dep set.
+# Cold build: ~15-25 min (compiles the OxCaml compiler from source).
+ocaml-base-build:
+    docker build \
+      -f docker/ocaml-oxcaml-base.Dockerfile \
+      --build-arg OXCAML_SWITCH="$(awk -F\" '/oxcaml_switch =/{print $2; exit}' versions.lock.toml)" \
+      --build-arg OXCAML_REPO_COMMIT="$(awk -F\" '/oxcaml_repo_commit =/{print $2; exit}' versions.lock.toml)" \
+      -t stt-bench-oxcaml-base:5.2.0-ox \
+      .
+
+check: doctor python-check analysis-check ts-check go-check elixir-check rust-check java-check scala-check cpp-check ocaml-check
 
 bench-ladder service_name service_url:
     # Build the loadgen with full release optimization ONCE up front. Running
@@ -220,7 +258,8 @@ conformance: compose-build
       go-nethttp-single \
       java-helidon-nima-single \
       scala-pekko-single \
-      cpp23-uwebsockets-single; \
+      cpp23-uwebsockets-single \
+      ocaml-oxcaml-single; \
     docker compose --profile loadgen run --rm --no-deps \
       --entrypoint /usr/local/bin/stt-conformance \
       loadgen \
@@ -232,7 +271,8 @@ conformance: compose-build
       --service go-nethttp-single=ws://go-nethttp-single:6000/ws/stt \
       --service java-helidon-nima-single=ws://java-helidon-nima-single:5000/ws/stt \
       --service scala-pekko-single=ws://scala-pekko-single:2500/ws/stt \
-      --service cpp23-uwebsockets-single=ws://cpp23-uwebsockets-single:1500/ws/stt
+      --service cpp23-uwebsockets-single=ws://cpp23-uwebsockets-single:1500/ws/stt \
+      --service ocaml-oxcaml-single=ws://ocaml-oxcaml-single:9000/ws/stt
 
 compose-single:
     docker compose --profile single up --build

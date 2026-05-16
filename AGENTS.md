@@ -2,14 +2,14 @@
 
 ## Project Structure & Module Organization
 
-This repo benchmarks streaming STT gateways behind one WebSocket protocol. Root orchestration: `justfile`, `docker-compose.yml`, `versions.lock.toml`, `docker/`, `scripts/`, and `results/`. Gateway services live in `services/rust-axum/src`, `services/go-nethttp`, `services/typescript-bun/src`, `services/python-fastapi/app`, and `services/elixir-phoenix/lib`; the shared Rust inference compute is in `services/inference-server/src`; the Rust load generator is in `loadgen/rust`. Current tests live beside each service (`services/go-nethttp/internal/**`, `services/typescript-bun/tests`, `services/elixir-phoenix/test`); add Rust tests near crate code and Python tests under `services/python-fastapi/tests`.
+This repo benchmarks streaming STT gateways behind one WebSocket protocol. Root orchestration: `justfile`, `docker-compose.yml`, `versions.lock.toml`, `docker/`, `scripts/`, and `results/`. Gateway services live in `services/rust-axum/src`, `services/go-nethttp`, `services/typescript-bun/src`, `services/python-fastapi/app`, `services/elixir-phoenix/lib`, and `services/ocaml-oxcaml/{lib,bin,test}`; the shared Rust inference compute is in `services/inference-server/src`; the Rust load generator is in `loadgen/rust`. Current tests live beside each service (`services/go-nethttp/internal/**`, `services/typescript-bun/tests`, `services/elixir-phoenix/test`, `services/ocaml-oxcaml/test`); add Rust tests near crate code and Python tests under `services/python-fastapi/tests`.
 
 ## Build, Test, and Development Commands
 
 - `just doctor`: install pinned local `uv`, Bun, and Go, then verify Python, Elixir/OTP, Rust, Docker, and cargo plugin versions.
 - `just py-sync`: sync the FastAPI virtualenv from `uv.lock`.
 - `just check`: run the full gate across doctor, Python, TypeScript/Bun, Go, Elixir, and Rust checks.
-- `just python-check`, `just ts-check`, `just go-check`, `just elixir-check`, `just rust-check`: run focused validation while iterating.
+- `just python-check`, `just ts-check`, `just go-check`, `just elixir-check`, `just rust-check`, `just ocaml-check`: run focused validation while iterating. `ocaml-check` requires the OxCaml switch — `just ensure-oxcaml-switch` (slow first run: ~15-20 min to build the OxCaml compiler from source).
 - `just compose-build`, `just compose-single`, `just compose-multi`: build and run Docker services.
 - `just conformance`: build images, start the single-profile services, and run the black-box WebSocket protocol conformance suite from the loadgen image.
 - `just bench-ladder rust-axum-single ws://127.0.0.1:3000/ws/stt`: run the load ladder and write paired summary JSON and raw sample CSV files to `results/`.

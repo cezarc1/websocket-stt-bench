@@ -108,5 +108,23 @@ fi
 BAZELISK_ACTUAL="$("$BAZEL_BIN" --version 2>/dev/null | awk '/^Bazelisk version:/ { print $3 }' | sed 's/^v//')"
 expect_version "$BAZELISK_ACTUAL" "$BAZELISK_EXPECTED" "bazelisk"
 
+# OCaml / OxCaml: the switch is created lazily by `just ensure-oxcaml-switch`.
+# Doctor only verifies the toolchain wrapper (opam binary itself); the heavy
+# switch-creation step is too expensive to require on every `just check`.
+OPAM_EXPECTED="$(version_value ocaml opam)"
+OXCAML_SWITCH_EXPECTED="$(version_value ocaml oxcaml_switch)"
+OPAM_BIN="$ROOT/.tools/bin/opam"
+if [ ! -x "$OPAM_BIN" ]; then
+  echo "opam: missing $OPAM_BIN; run: just ensure-opam" >&2
+  exit 1
+fi
+expect_version "$("$OPAM_BIN" --version | head -n1)" "$OPAM_EXPECTED" "opam"
+
+# Soft check: report (but don't fail) if the OxCaml switch isn't yet created,
+# so first-time contributors learn what to run without blocking other checks.
+if ! "$OPAM_BIN" switch list --short 2>/dev/null | grep -qx "$OXCAML_SWITCH_EXPECTED"; then
+  echo "doctor note: OxCaml switch $OXCAML_SWITCH_EXPECTED not yet created; run: just ensure-oxcaml-switch" >&2
+fi
+
 docker version --format '{{.Client.Version}}' >/dev/null
 echo "doctor ok"

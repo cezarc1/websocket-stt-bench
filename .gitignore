@@ -16,6 +16,8 @@
 /services/elixir-phoenix/doc/
 /services/elixir-phoenix/.elixir_ls/
 /services/typescript-bun/node_modules/
+/services/ocaml-oxcaml/_build/
+/services/ocaml-oxcaml/_opam/
 
 # Bazel writes convenience symlinks (`bazel-bin`, `bazel-out`, `bazel-testlogs`,
 # `bazel-<workspace>`) into the workspace root. `.tools/` already covers
