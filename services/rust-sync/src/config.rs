@@ -31,6 +31,15 @@ const DEFAULT_FLUSH_PHASE_JITTER_MS: u64 = 0;
 pub const INFERENCE_CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 pub const INFERENCE_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Single socket read timeout, set once per connection. A streaming
+/// client delivers a frame every ~20 ms, so `read()` returns per frame
+/// and the flush deadline is observed within a frame interval regardless
+/// of this value; it only bounds how long a *quiet* connection blocks
+/// before the loop re-checks the deadline. Kept well under the flush
+/// interval so a paused client can't push a flush past the SLO, while
+/// avoiding the per-frame `setsockopt` a per-iteration timeout incurs.
+pub const POLL_TIMEOUT: Duration = Duration::from_millis(100);
+
 /// Listen backlog. The loadgen opens every session within a ~1 s spread,
 /// so the default 128-deep accept queue overflows and the kernel drops
 /// SYNs (client-side connect timeouts) long before steady state. A deep

@@ -23,7 +23,8 @@ use tungstenite::protocol::{CloseFrame, Role};
 use tungstenite::{Message, WebSocket};
 
 use crate::config::{
-    Config, FRAME_BYTES, REASON_BAD_FRAME_SIZE, REASON_NEED_START, REASON_TEXT_AFTER_START,
+    Config, FRAME_BYTES, POLL_TIMEOUT, REASON_BAD_FRAME_SIZE, REASON_NEED_START,
+    REASON_TEXT_AFTER_START,
 };
 use crate::http::{self, Route};
 use crate::inference::{Inference, InferenceError};
@@ -103,14 +104,19 @@ fn run(ws: &mut WebSocket<TcpStream>, config: &Config) {
     } else {
         Duration::from_millis(rand::rng().random_range(0..=jitter_ms))
     };
+    // One read timeout for the connection's lifetime. A per-iteration
+    // `set_read_timeout(remaining)` was a `setsockopt` on every frame —
+    // ~50/s/conn of pure overhead at scale. A streaming client returns
+    // `read()` per frame so the deadline below is still observed within a
+    // frame interval; `POLL_TIMEOUT` only bounds a quiet connection.
+    let _ = ws.get_ref().set_read_timeout(Some(POLL_TIMEOUT));
     // `expected` advances by exactly one interval per flush (rust-axum's
     // `MissedTickBehavior::Delay` equivalent): under overload it falls
     // behind `now`, so `flush_lateness_ms` grows — the intended signal.
     let mut expected = Instant::now() + config.flush_interval + phase;
 
     loop {
-        let remaining = expected.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
+        if Instant::now() >= expected {
             if flush(ws, config, &mut inference, &mut scratch, expected).is_break() {
                 return;
             }
@@ -118,8 +124,6 @@ fn run(ws: &mut WebSocket<TcpStream>, config: &Config) {
             continue;
         }
 
-        // Bounds the blocking read at the flush deadline.
-        let _ = ws.get_ref().set_read_timeout(Some(remaining));
         match ws.read() {
             Ok(Message::Binary(payload)) if payload.len() == FRAME_BYTES => {
                 seq += 1;
