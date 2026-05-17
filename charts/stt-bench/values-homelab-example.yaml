@@ -123,6 +123,24 @@ gateways:
       limits:
         cpu: "2"
         memory: 2Gi
+  rustSync:
+    replicas: 0
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+  rustSync2cpu:
+    replicas: 0
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
   ocamlWebsocketAsync:
     replicas: 0
     resources:

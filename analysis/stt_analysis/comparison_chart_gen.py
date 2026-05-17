@@ -28,8 +28,9 @@ import matplotlib.pyplot as plt
 # raw-transport variants exclude the generic first-party
 # WebSocket/HTTP/SHA-1/base64 shim so package code is treated consistently.
 RUNTIMES: list[tuple[str, int, int, int, int, str]] = [
-    ("C++23 / uWebSockets", 4450, 1551, -10, -14, "right"),
-    ("Async Rust / Axum", 3475, 696, -10, 10, "right"),
+    ("Rust / mio", 4400, 1221, 10, -16, "left"),
+    ("C++23 / uWebSockets", 4350, 1551, -10, -14, "right"),
+    ("Async Rust / Tokio", 3475, 696, 10, 10, "left"),
     ("Java / Helidon Nima", 2625, 917, 10, 10, "left"),
     ("TypeScript / Bun", 2550, 734, 10, -14, "left"),
     ("Go / net/http", 2500, 893, 10, -14, "left"),
@@ -43,8 +44,8 @@ RUNTIMES: list[tuple[str, int, int, int, int, str]] = [
 # Strict Pareto-optimal points: no other runtime has BOTH higher sessions
 # AND lower LOC. Highlighted in yellow in the rendered chart.
 PARETO = {
-    "C++23 / uWebSockets",
-    "Async Rust / Axum",
+    "Rust / mio",
+    "Async Rust / Tokio",
     "Python (uvloop + FastAPI)",
 }
 

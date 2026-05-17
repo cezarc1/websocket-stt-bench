@@ -6,6 +6,7 @@ COPY rust-toolchain.toml Cargo.toml Cargo.lock deny.toml ./
 COPY services/inference-server/Cargo.toml services/inference-server/Cargo.toml
 COPY services/rust-axum/Cargo.toml services/rust-axum/Cargo.toml
 COPY loadgen/rust/Cargo.toml loadgen/rust/Cargo.toml
+COPY services/rust-sync/Cargo.toml services/rust-sync/Cargo.toml
 COPY services/inference-server/src services/inference-server/src
 COPY services/rust-axum/src services/rust-axum/src
 COPY loadgen/rust/src loadgen/rust/src

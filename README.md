@@ -10,7 +10,7 @@ I bench:
 - C++23 - uWebSockets/uSockets on Linux epoll
 - Python 3.14.4 and 3.14.4t - FastAPI, uvloop, Granian
 - Elixir 1.19.5 - Phoenix + Bandit on BEAM, raw WebSock
-- Rust 1.95 - async Axum/Tokio
+- Rust 1.95 - async Axum/Tokio, and a no-async-runtime two-thread `mio`/epoll build
 - TypeScript - Bun 1.3.13, Bun.serve WebSockets
 - Go 1.26.3 - net/http and coder/websocket
 - Java 25 LTS - Helidon Níma with virtual threads
@@ -27,7 +27,8 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 
 | Runtime | 1 vCPU | 2 vCPU | Bottleneck | App LOC | Details |
 |---|---:|---:|---|---:|---|
-| **[C++23](https://en.cppreference.com/w/cpp/23) + [uWebSockets 20.77](https://github.com/uNetworking/uWebSockets)** | **4450** | **TBD** | CPU/latency | 1.6k | [runs](services/cpp23-uwebsockets/BENCHMARK.md) |
+| **[Rust 1.95](https://github.com/rust-lang/rust) — two `mio`/epoll threads, **no async runtime**** | **4400**¶ | **5500** (1.25X) | newest-p50 latency | 1221 | [runs](services/rust-sync/BENCHMARK.md) |
+| **[C++23](https://en.cppreference.com/w/cpp/23) + [uWebSockets 20.77](https://github.com/uNetworking/uWebSockets)** | **4350**◆ | **TBD** | newest-p50 latency | 1.6k | [runs](services/cpp23-uwebsockets/BENCHMARK.md) |
 | **[Rust 1.95](https://github.com/rust-lang/rust) + async [Axum](https://github.com/tokio-rs/axum) / [Tokio](https://github.com/tokio-rs/tokio)** | **3475** | **4250** (1.22X) | CPU | 696 | [runs](services/rust-axum/BENCHMARK.md) |
 | **[Java 25 LTS](https://openjdk.org/projects/jdk/25/) + [Helidon Níma 4.3](https://helidon.io/)** | 2625‡ | 3750 (1.43X) | latency, then heap/OOM cliff | 917 | [runs](services/java-helidon-nima/BENCHMARK.md) |
 | **[TypeScript](https://www.typescriptlang.org/) on [Bun 1.3.13](https://bun.sh/)** | 2550‡ | n/a | memory/error cliff; fetch caveat | 734 | [runs](services/typescript-bun/BENCHMARK.md) |
@@ -42,6 +43,9 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 † Python scales out at 2 vCPU by adding worker processes; each Granian worker owns one asyncio loop.
 ‡ 1 vCPU / 2 GiB memory. The 1 GiB shape also OOMs near the edge, so the bumped 2 GiB shape is reported.
 § OxCaml runs one Async domain; a 2-vCPU pod does not use the second core meaningfully. Replica fan-out reached 3350 / 1.61X.
+¶ No async runtime, zero new dependencies, plain HTTP/1.1. Two OS threads — a `mio`/epoll WebSocket loop + a dedicated inference loop (`std::sync::mpsc` + `mio::Waker`), the structural mirror of C++'s uWebSockets-loop + libcurl-`jthread`. 1 vCPU: **4400 confirmed (2/2) ↔ 4500 borderline ↔ 4600 first solid fail (2/2)**; 2 vCPU: **5500 confirmed ↔ 5600 first fail** (~1.25× in-pod; the prior single-loop revision was replica-only). Zero errors/restarts across 50→7000. Three-stage journey and per-point tables: [runs](services/rust-sync/BENCHMARK.md).
+◆ Re-validated 2026-05-17 on the crash-fixed image: **4350 confirmed (2/2) ↔ 4400 first solid fail (2/2)**, a clean newest-p50 latency edge with zero errors and zero crashes through the whole 50→4450 sweep. The earlier 4450 was measured on a binary that SIGSEGVs under load (a `WsSink` use-after-free + a Bazel-9 build break — both fixed here); the fix trades ~2% steady-state capacity (`shared_ptr` + virtual dispatch on the hot send path) for correctness, so 4350 is the honest reproducible ceiling. See [runs](services/cpp23-uwebsockets/BENCHMARK.md).
+
 LOC note: the TL;DR and chart use application LOC. For both OCaml raw-transport variants, that excludes the generic first-party WebSocket/HTTP/SHA-1/base64 transport shim that package-backed runtimes get from dependencies. Comments and blank lines are not counted.
 
 The above numbers are the highest confirmed session counts that passed the SLO at the given vCPU shape. Detailed brackets, tables, and run notes live in the linked service benchmark docs.
@@ -50,8 +54,8 @@ The above numbers are the highest confirmed session counts that passed the SLO a
 
 ## Takeaways
 
-- No surpise that C++ leads per vCPU; async Rust is a distant second, which I am surprised by the gap. The GC'ed languages then follow with Java, TS, and Go are still the broad high-throughput tier
-- Async Rust is likely the best balance here: 696 LOC and 3475 sessions/vCPU. Both Claude Opus 4.6 (max) and GPT 4.5 (xhigh) had no issue writing Rust.
+- The biggest surprise: the per-vCPU leader is **Rust with no async runtime at all** — a two-thread `mio`/epoll build (one WebSocket loop, one inference loop, plain HTTP/1.1, zero extra deps) at 4400 sessions/vCPU, just past C++ (4350). I'd assumed the last gap to async Rust was HTTP/1.1-vs-HTTP/2; it wasn't — it was cooperative single-loop contention, and one OS thread of separation took it 3150 → 4400. The architecture, never the language or the transport, was the gap.
+- Async Rust is still the best *balance*: 696 LOC and 3475 sessions/vCPU, the leanest of the high-capacity tier even though raw-capacity now goes to the no-runtime Rust build. Both Claude Opus (max) and GPT 4.5 (xhigh) had no issue writing Rust.
 - Tail-latency SLOs expose GC jitter. Passing requires p95 frame latency, not just average throughput, so allocation pressure, safepoints, and collection pauses can turn otherwise healthy throughput into latency cliffs. The size of that penalty is stack- and tuning-dependent, not a blanket verdict on every GC runtime.
 - Two managed-runtime clusters show up. Java, Bun, and Go form the fast GC/managed tier around 2500-2625 sessions/vCPU, with Java narrowly ahead. Actor-style runtimes cluster lower at 1 vCPU: Elixir/BEAM at 1250 and Scala/Pekko at 1400, though both land near 2200-2250 at 2 vCPU; Scala still has a connect-timeout caveat.
 - BEAM scales vertically really well but dissapoints overall: Elixir trails at 1 vCPU but has the cleanest 1→2 vCPU lift. Similar story with Scala + actor framework. Perhaps this is a actor concurency model issue overall? TODO: investigate this.
@@ -61,7 +65,7 @@ The above numbers are the highest confirmed session counts that passed the SLO a
 - Free-threaded Python with this FastAPI/Granian stack has issues; TODO: investigate this.
 - Some languages/runtimes were easier to prompt for than others. Rust and Python took me one or two prompts. C++ needed me to take over and repeatedly steer towards C++ concepts I have long forgotten (RAII, move semantics, etc); OxCaml was easy but building was downright painful (30m or so to build, OxCaml desperately needs better tooling like pre-built docker images).
 
-**Pareto frontier:** Python (678 LOC / 1100 sessions, leanest) · Async Rust/Axum (696 LOC / 3475, best balance) · C++23 (1551 LOC / 4450, most capacity).
+**Pareto frontier:** Python (678 LOC / 1100 sessions, leanest) · Async Rust/Tokio (696 LOC / 3475, best balance) · Rust/`mio` no-runtime (1221 LOC / 4400, most capacity). C++23 (1551 LOC / 4350) is now strictly dominated — the no-runtime Rust build has both more capacity and fewer LOC — so it drops off the frontier.
 
 ## The SLO: what "passing" means
 
@@ -123,19 +127,21 @@ flowchart LR
 | Go | 893 | 893 | 6 | `net/http`, `coder/websocket`, h2c inference client |
 | Java | 917 | 917 | 16 | Helidon Níma virtual threads, sealed outbound messages |
 | Stock OCaml/Async | 850 | 1220 | 25 | raw `Async.Tcp`, hand-rolled RFC 6455, structural one-inflight flush loop |
+| Rust/sync (`mio`) | 1221 | 1221 | 6 | two `mio` epoll loops on two OS threads (no async runtime), `mpsc`+`Waker` handoff, bounded shared inference pool |
 | OxCaml | 879 | 1244 | 21 | raw `Async.Tcp`, hand-rolled RFC 6455, opaque inflight capability |
 | C++23 | 1551 | 1551 | 11 | uWebSockets loop-per-thread, libcurl HTTP/2, Glaze JSON |
 
-Application LOC is the chart count: code-only production lines after excluding blank/comment lines. For the two OCaml raw-transport variants, it also excludes the generic first-party transport/crypto shim (`Base64`, `Sha1`, `Http1`, `Websocket_frame`, `Websocket_handshake`) that package-backed runtimes get from dependencies. Raw production LOC keeps every shipped first-party production line, including that shim.
+Application LOC is the chart count: code-only production lines after excluding blank/comment lines. For the two OCaml raw-transport variants, it also excludes the generic first-party transport/crypto shim (`Base64`, `Sha1`, `Http1`, `Websocket_frame`, `Websocket_handshake`) that package-backed runtimes get from dependencies. Raw production LOC keeps every shipped first-party production line, including that shim. The no-runtime Rust gateway uses no such shim, so its two counts are equal.
 
-The load-bearing invariant is one in-flight inference request per connection. Every implementation enforces it, but the expression differs: semaphore, atomic flag, token channel, process state, task guard, sequential flush loop, or `Mvar`-backed capability.
+The load-bearing invariant is one in-flight inference request per connection. Every implementation enforces it, but the expression differs: semaphore, atomic flag, token channel, process state, task guard, sequential flush loop, `Mvar`-backed capability, or — in the no-runtime Rust gateway — the single shared-pool inference slot a connection holds while its request is in flight.
 
 ## Which runtime?
 
 | If you optimize for | Pick | Why |
 |---|---|---|
-| Lowest dollars per session | C++23/uWebSockets | 4450 sessions/vCPU |
-| Lowest dollars with memory safety | Async Rust/Axum | 3475 sessions/vCPU with compact code |
+| Lowest dollars per session | Rust/`mio` (no runtime) | 4400 sessions/vCPU, memory-safe, no async runtime — beats C++ |
+| Leanest of the high-capacity tier | Async Rust/Axum | 3475 sessions/vCPU in 696 LOC |
+| Maximum capacity in C++ | C++23/uWebSockets | 4350 sessions/vCPU (validated, crash-fixed) |
 | Rust-adjacent JVM capacity | Java/Helidon Níma | 2625 sessions/vCPU; watch heap at the cliff |
 | JS ecosystem with strong capacity | TypeScript on Bun | 2550 sessions/vCPU on native Bun primitives |
 | Go operational simplicity | Go/net-http | 2500 sessions/vCPU and explicit h2c transport |

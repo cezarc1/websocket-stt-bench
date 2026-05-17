@@ -327,6 +327,36 @@ gateways:
       limits:
         cpu: "2"
         memory: 2Gi
+  rustSync:
+    enabled: true
+    name: stt-rust-sync-gateway
+    image: rust-sync
+    replicas: 0
+    port: 10000
+    env:
+      MALLOC_ARENA_MAX: "2"
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+  rustSync2cpu:
+    enabled: true
+    name: stt-rust-sync-2vcpu-gateway
+    image: rust-sync
+    replicas: 0
+    port: 10000
+    env:
+      MALLOC_ARENA_MAX: "2"
+    resources:
+      requests:
+        cpu: "2"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
   ocamlWebsocketAsync:
     enabled: true
     name: stt-ocaml-websocket-async-gateway

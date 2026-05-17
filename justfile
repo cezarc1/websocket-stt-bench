@@ -259,6 +259,7 @@ conformance: compose-build
     trap cleanup EXIT; \
     docker compose --profile single up -d --no-build \
       rust-axum-single \
+      rust-sync-single \
       elixir-phoenix-single \
       python-fastapi-stock-single \
       python-fastapi-mt-single \
@@ -273,6 +274,7 @@ conformance: compose-build
       --entrypoint /usr/local/bin/stt-conformance \
       loadgen \
       --service rust-axum-single=ws://rust-axum-single:3000/ws/stt \
+      --service rust-sync-single=ws://rust-sync-single:10000/ws/stt \
       --service elixir-phoenix-single=ws://elixir-phoenix-single:4000/ws/stt \
       --service python-fastapi-stock-single=ws://python-fastapi-stock-single:8000/ws/stt \
       --service python-fastapi-mt-single=ws://python-fastapi-mt-single:8000/ws/stt \

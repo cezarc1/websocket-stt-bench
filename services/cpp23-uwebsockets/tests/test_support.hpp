@@ -25,7 +25,9 @@ public:
         close_code = code;
         close_reason = reason;
     }
+    void mark_closed() noexcept override { marked_closed = true; }
     std::vector<std::string> sent;
+    bool marked_closed = false;
     int close_code = 0;
     std::string close_reason;
 };
@@ -81,7 +83,11 @@ struct SessionFixture {
     CapturingInference inference;
     RecordingSink sink;
     std::shared_ptr<InlineScheduler> scheduler = std::make_shared<InlineScheduler>();
-    std::shared_ptr<Session> session = std::make_shared<Session>(config, inference, sink, scheduler);
+    // Non-owning alias: the Session takes the sink by shared_ptr now, but
+    // the fixture still owns `sink` by value so tests assert on it directly.
+    std::shared_ptr<Session> session = std::make_shared<Session>(
+        config, inference, std::shared_ptr<OutboundSink>(std::shared_ptr<void>{}, &sink),
+        scheduler);
 };
 
 }  // namespace stt::test_support
