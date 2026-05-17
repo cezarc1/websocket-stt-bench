@@ -1,11 +1,10 @@
 //! Canonical synchronous Rust STT gateway — **evented**, not
-//! thread-per-connection. A single `mio` (epoll) event loop drives every
-//! WebSocket and every inference socket; no async runtime, no
-//! per-connection thread. Connection state is a cheap heap object, one
-//! loop multiplexes thousands of fds, an in-flight inference POST never
-//! blocks the loop (its socket is just another fd in the same poll), and
-//! flush deadlines live in one heap — so cost scales with *work*, not
-//! with connection count.
+//! thread-per-connection, and **no async runtime**. A single `mio`
+//! (epoll) event loop drives every WebSocket plus a bounded shared pool
+//! of inference sockets. Connection state is a cheap heap object; flush
+//! deadlines live in one heap (O(log N) per wake); inference fans out
+//! over a fixed pool, not one socket per session — so the loop's fd
+//! count and per-event cost scale with *work*, not connection count.
 
 mod config;
 mod http;
@@ -24,15 +23,35 @@ use mio::{Events, Interest, Poll, Token};
 use socket2::{Domain, Socket, Type};
 
 use crate::config::{Config, LISTEN_BACKLOG};
-use crate::session::{Conn, Outcome, decode_token, ws_token};
+use crate::inference::InferencePool;
+use crate::session::{Conn, Outcome, Tick, ws_token};
 
 const LISTENER: Token = Token(0);
+/// Pool-socket tokens live above any plausible connection id so the two
+/// token spaces never collide.
+const POOL_BASE: usize = 1 << 40;
 const IDLE_CAP: Duration = Duration::from_secs(1);
 
-/// `(deadline, conn id)`, min-heap via `Reverse`. Exactly one live entry
-/// per connection: pushed on accept, re-pushed each time its timer is
-/// serviced. A stale entry (deadline moved later because inference
-/// finished) just causes one cheap no-op `on_timer` pop — self-correcting.
+fn pool_token(slot: usize) -> Token {
+    Token(POOL_BASE + slot)
+}
+
+enum Source {
+    Listener,
+    Ws(usize),
+    Pool(usize),
+}
+
+fn decode(token: Token) -> Source {
+    if token == LISTENER {
+        Source::Listener
+    } else if token.0 >= POOL_BASE {
+        Source::Pool(token.0 - POOL_BASE)
+    } else {
+        Source::Ws(token.0)
+    }
+}
+
 type Timers = BinaryHeap<Reverse<(Instant, usize)>>;
 
 fn main() -> io::Result<()> {
@@ -41,9 +60,10 @@ fn main() -> io::Result<()> {
     let mut listener = bind_listener(config.port)?;
 
     eprintln!(
-        "{{\"runtime\":\"rust-sync\",\"model\":\"evented (mio epoll, no async runtime)\",\"port\":{},\"inference\":\"{}\",\"flush_interval_ms\":{}}}",
+        "{{\"runtime\":\"rust-sync\",\"model\":\"evented (mio epoll, no async runtime)\",\"port\":{},\"inference\":\"{}\",\"inference_clients\":{},\"flush_interval_ms\":{}}}",
         config.port,
         inference_addr,
+        config.inference_clients,
         config.flush_interval.as_millis()
     );
 
@@ -53,6 +73,7 @@ fn main() -> io::Result<()> {
     let mut events = Events::with_capacity(1024);
     let mut conns: HashMap<usize, Conn> = HashMap::new();
     let mut timers: Timers = BinaryHeap::new();
+    let mut pool = InferencePool::new(inference_addr, config.inference_clients);
     let mut next_id: usize = 1;
 
     loop {
@@ -65,49 +86,74 @@ fn main() -> io::Result<()> {
         let mut closing: Vec<usize> = Vec::new();
 
         for event in events.iter() {
-            let token = event.token();
-            if token == LISTENER {
-                accept(
+            match decode(event.token()) {
+                Source::Listener => accept(
                     &listener,
                     &mut conns,
                     &mut timers,
                     &mut next_id,
                     &poll,
-                    inference_addr,
                     &config,
-                );
-                continue;
-            }
-            let (id, is_inf) = decode_token(token);
-            let Some(conn) = conns.get_mut(&id) else {
-                continue;
-            };
-            let reg = poll.registry();
-            let outcome = if is_inf {
-                conn.on_inference(reg, event.is_writable(), &config)
-            } else if event.is_writable() {
-                conn.on_writable(reg, &config)
-            } else {
-                conn.on_readable(reg, &config)
-            };
-            if matches!(outcome, Outcome::Close) {
-                closing.push(id);
+                ),
+                Source::Ws(id) => {
+                    if let Some(conn) = conns.get_mut(&id) {
+                        let reg = poll.registry();
+                        let outcome = if event.is_writable() {
+                            conn.on_writable(reg)
+                        } else {
+                            conn.on_readable(reg)
+                        };
+                        if matches!(outcome, Outcome::Close) {
+                            closing.push(id);
+                        }
+                    }
+                }
+                Source::Pool(slot) => {
+                    if let Some((owner, result)) =
+                        pool.on_event(slot, event.is_writable(), poll.registry(), pool_token)
+                        && let Some(conn) = conns.get_mut(&owner)
+                        && matches!(
+                            conn.deliver(poll.registry(), result, &config),
+                            Outcome::Close
+                        )
+                    {
+                        closing.push(owner);
+                    }
+                }
             }
         }
 
-        // Service only the connections whose deadline actually elapsed —
-        // O(due + log N), not O(N). Re-push each serviced connection's
-        // next deadline so it stays in the heap exactly once.
         while let Some(&Reverse((t, id))) = timers.peek() {
             if t > now {
                 break;
             }
             timers.pop();
-            if let Some(conn) = conns.get_mut(&id) {
-                if matches!(conn.on_timer(poll.registry(), now, &config), Outcome::Close) {
-                    closing.push(id);
-                } else {
+            let Some(conn) = conns.get_mut(&id) else {
+                continue;
+            };
+            match conn.on_timer(now, &config) {
+                Tick::Keep => timers.push(Reverse((conn.deadline(), id))),
+                Tick::Flush(batch) => {
+                    if let Some(slot) =
+                        pool.submit(id, conn.pcm(), &config, poll.registry(), pool_token)
+                    {
+                        conn.begin_pending(batch, slot, now);
+                    }
                     timers.push(Reverse((conn.deadline(), id)));
+                }
+                Tick::Timeout(slot) => {
+                    if let Some((owner, err)) = pool.abort(slot, poll.registry(), pool_token)
+                        && let Some(c) = conns.get_mut(&owner)
+                        && matches!(
+                            c.deliver(poll.registry(), Err(err), &config),
+                            Outcome::Close
+                        )
+                    {
+                        closing.push(owner);
+                    }
+                    if let Some(c) = conns.get_mut(&id) {
+                        timers.push(Reverse((c.deadline(), id)));
+                    }
                 }
             }
         }
@@ -120,14 +166,12 @@ fn main() -> io::Result<()> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn accept(
     listener: &TcpListener,
     conns: &mut HashMap<usize, Conn>,
     timers: &mut Timers,
     next_id: &mut usize,
     poll: &Poll,
-    inference_addr: SocketAddr,
     config: &Config,
 ) {
     loop {
@@ -143,7 +187,7 @@ fn accept(
                 {
                     continue;
                 }
-                let conn = Conn::new(id, stream, inference_addr, config);
+                let conn = Conn::new(id, stream, config);
                 timers.push(Reverse((conn.deadline(), id)));
                 conns.insert(id, conn);
             }

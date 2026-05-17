@@ -27,6 +27,11 @@ pub const LISTEN_BACKLOG: i32 = 8192;
 
 const DEFAULT_PORT: u16 = 10000;
 const DEFAULT_INFERENCE_URL: &str = "http://inference-server:9000";
+/// Shared inference connection pool size. Matches rust-axum's default so
+/// the comparison isolates the runtime, not the transport fan-out; one
+/// pooled HTTP/1.1 socket per *in-flight* request rather than one per
+/// gateway connection keeps the single event loop's fd count bounded.
+const DEFAULT_INFERENCE_CLIENTS: usize = 512;
 const DEFAULT_CPU_PASSES: u32 = 4;
 const DEFAULT_MODEL_DELAY_MS: u64 = 75;
 const DEFAULT_FLUSH_INTERVAL_MS: u64 = 1000;
@@ -41,6 +46,7 @@ pub struct Config {
     pub inference_port: u16,
     /// Request path, e.g. `/infer`.
     pub inference_path: String,
+    pub inference_clients: usize,
     pub cpu_passes: u32,
     pub model_delay_ms: u64,
     pub flush_interval: Duration,
@@ -57,6 +63,8 @@ impl Config {
             inference_host,
             inference_port,
             inference_path: "/infer".to_owned(),
+            inference_clients: env_parsed("INFERENCE_HTTP_CLIENTS", DEFAULT_INFERENCE_CLIENTS)
+                .max(1),
             cpu_passes,
             model_delay_ms: env_parsed("MODEL_DELAY_MS", DEFAULT_MODEL_DELAY_MS),
             flush_interval: Duration::from_millis(
