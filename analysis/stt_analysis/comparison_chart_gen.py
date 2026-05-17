@@ -31,9 +31,9 @@ RUNTIMES: list[tuple[str, int, int, int, int, str]] = [
     ("TypeScript / Bun", 2550, 734, 10, -14, "left"),
     ("Go / net/http", 2500, 893, 10, -14, "left"),
     ("OCaml / OxCaml", 2075, 1235, 10, 10, "left"),
+    ("OCaml / Async raw", 1930, 1236, 10, -14, "left"),
     ("Scala / Pekko", 1400, 726, 10, -14, "left"),
     ("Elixir / Phoenix", 1250, 784, 10, 10, "left"),
-    ("OCaml / Async libs", 1212, 882, 10, -14, "left"),
     ("Python (uvloop + FastAPI)", 1100, 678, -10, 10, "right"),
 ]
 

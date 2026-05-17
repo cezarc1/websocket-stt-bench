@@ -179,7 +179,7 @@ ppx_jane = "latest"
 # `digestif` dep doesn't build on the OxCaml 5.2.0+ox switch invariant
 # (mode-system mismatch in baijiu_rmd160.ml). Both the HTTP/1.1 server +
 # inference client and the WebSocket framing/handshake are now hand-rolled
-# on top of raw `Async.Tcp` (see lib/server.ml, lib/ws_frame.ml,
+# on top of raw `Async.Tcp` (see lib/server.ml, lib/websocket_frame.ml,
 # lib/inference.ml). RFC 6455 framing is ~200 LOC.
 # HTTP/1.1 client for the inference POST. The inference server (axum)
 # accepts both HTTP/1.1 and HTTP/2 cleartext on the same listener, so we
@@ -213,8 +213,6 @@ dune = "latest"
 core = "latest"
 core_unix = "latest"
 async = "latest"
-cohttp_async = "latest"
-websocket_async = "latest"
 yojson = "latest"
 ppx_jane = "latest"
 alcotest = "latest"
