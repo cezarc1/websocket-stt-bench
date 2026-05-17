@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 RUNTIMES: list[tuple[str, int, int, int, int, str]] = [
     ("Rust / mio", 4400, 1221, 10, -16, "left"),
     ("C++23 / uWebSockets", 4350, 1551, -10, -14, "right"),
-    ("Async Rust / Tokio", 3475, 696, -10, 10, "right"),
+    ("Async Rust / Tokio", 3475, 696, 10, 10, "left"),
     ("Java / Helidon Nima", 2625, 917, 10, 10, "left"),
     ("TypeScript / Bun", 2550, 734, 10, -14, "left"),
     ("Go / net/http", 2500, 893, 10, -14, "left"),
