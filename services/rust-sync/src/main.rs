@@ -1,10 +1,14 @@
-//! Canonical synchronous Rust STT gateway — **evented**, not
-//! thread-per-connection, and **no async runtime**. A single `mio`
-//! (epoll) event loop drives every WebSocket plus a bounded shared pool
-//! of inference sockets. Connection state is a cheap heap object; flush
-//! deadlines live in one heap (O(log N) per wake); inference fans out
-//! over a fixed pool, not one socket per session — so the loop's fd
-//! count and per-event cost scale with *work*, not connection count.
+//! Canonical synchronous Rust STT gateway — **evented**, **no async
+//! runtime**, and **two OS threads**: a `mio`/epoll WebSocket loop
+//! (thread A, here) plus a dedicated inference loop (thread B,
+//! [`inference`]). The split deliberately mirrors the C++23 gateway
+//! (uWebSockets loop + a libcurl `std::jthread`): inference connect /
+//! send / receive / JSON-parse never contends with WebSocket flushes for
+//! the same core, and on the kernel scheduler a long inference burst is
+//! preempted instead of stalling every connection's flush. Thread A
+//! hands batches over an `mpsc` channel and is woken back via a
+//! [`mio::Waker`] when results land. Connection state is a cheap heap
+//! object; flush deadlines live in one heap (O(log N) per wake).
 
 mod config;
 mod http;
@@ -20,36 +24,31 @@ use std::net::{SocketAddr, TcpListener as StdListener, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
 use mio::net::TcpListener;
-use mio::{Events, Interest, Poll, Token};
+use mio::{Events, Interest, Poll, Token, Waker};
 use socket2::{Domain, Socket, Type};
 
 use crate::config::{Config, LISTEN_BACKLOG};
-use crate::inference::InferencePool;
 use crate::session::{Conn, Outcome, Tick, ws_token};
 
 const LISTENER: Token = Token(0);
-/// Pool-socket tokens live above any plausible connection id so the two
-/// token spaces never collide.
-const POOL_BASE: usize = 1 << 40;
+/// Thread B fires this (via a [`Waker`]) after pushing completions, so
+/// the loop drains `done_rx` promptly. Connection ids start at 2 so the
+/// `LISTENER`/`RESULT` tokens never collide with a `Ws(id)`.
+const RESULT: Token = Token(1);
+const FIRST_CONN_ID: usize = 2;
 const IDLE_CAP: Duration = Duration::from_secs(1);
-
-fn pool_token(slot: usize) -> Token {
-    Token(POOL_BASE + slot)
-}
 
 enum Source {
     Listener,
+    Result,
     Ws(usize),
-    Pool(usize),
 }
 
 fn decode(token: Token) -> Source {
-    if token == LISTENER {
-        Source::Listener
-    } else if token.0 >= POOL_BASE {
-        Source::Pool(token.0 - POOL_BASE)
-    } else {
-        Source::Ws(token.0)
+    match token {
+        LISTENER => Source::Listener,
+        RESULT => Source::Result,
+        other => Source::Ws(other.0),
     }
 }
 
@@ -83,7 +82,7 @@ fn main() -> io::Result<()> {
     let mut listener = bind_listener(config.port)?;
 
     eprintln!(
-        "{{\"runtime\":\"rust-sync\",\"model\":\"evented (mio epoll, no async runtime)\",\"port\":{},\"inference\":\"{}\",\"inference_clients\":{},\"flush_interval_ms\":{}}}",
+        "{{\"runtime\":\"rust-sync\",\"model\":\"evented two-thread (ws-loop + inference-loop, no async runtime)\",\"port\":{},\"inference\":\"{}\",\"inference_clients\":{},\"flush_interval_ms\":{}}}",
         config.port,
         inference_addr,
         config.inference_clients,
@@ -93,11 +92,21 @@ fn main() -> io::Result<()> {
     let mut poll = Poll::new()?;
     poll.registry()
         .register(&mut listener, LISTENER, Interest::READABLE)?;
+    // Bound to RESULT on *this* poll; thread B fires it after pushing
+    // completions so the loop drains `done_rx` without waiting for its
+    // next timer wake.
+    let a_waker = Waker::new(poll.registry(), RESULT)?;
+    let (infer, done_rx) = inference::spawn(
+        inference_addr,
+        config.inference_clients,
+        config.clone(),
+        a_waker,
+    )?;
+
     let mut events = Events::with_capacity(4096);
     let mut conns: ConnMap = ConnMap::default();
     let mut timers: Timers = BinaryHeap::new();
-    let mut pool = InferencePool::new(inference_addr, config.inference_clients);
-    let mut next_id: usize = 1;
+    let mut next_id: usize = FIRST_CONN_ID;
 
     loop {
         let timeout = match timers.peek() {
@@ -118,6 +127,19 @@ fn main() -> io::Result<()> {
                     &poll,
                     &config,
                 ),
+                Source::Result => {
+                    // One wake coalesces N completions; drain them all.
+                    while let Ok((owner, result)) = done_rx.try_recv() {
+                        if let Some(conn) = conns.get_mut(&owner)
+                            && matches!(
+                                conn.deliver(poll.registry(), result, &config),
+                                Outcome::Close
+                            )
+                        {
+                            closing.push(owner);
+                        }
+                    }
+                }
                 Source::Ws(id) => {
                     if let Some(conn) = conns.get_mut(&id) {
                         let reg = poll.registry();
@@ -129,18 +151,6 @@ fn main() -> io::Result<()> {
                         if matches!(outcome, Outcome::Close) {
                             closing.push(id);
                         }
-                    }
-                }
-                Source::Pool(slot) => {
-                    if let Some((owner, result)) =
-                        pool.on_event(slot, event.is_writable(), poll.registry(), pool_token)
-                        && let Some(conn) = conns.get_mut(&owner)
-                        && matches!(
-                            conn.deliver(poll.registry(), result, &config),
-                            Outcome::Close
-                        )
-                    {
-                        closing.push(owner);
                     }
                 }
             }
@@ -157,25 +167,29 @@ fn main() -> io::Result<()> {
             match conn.on_timer(now, &config) {
                 Tick::Keep => timers.push(Reverse((conn.deadline(), id))),
                 Tick::Flush(batch) => {
-                    if let Some(slot) =
-                        pool.submit(id, conn.pcm(), &config, poll.registry(), pool_token)
-                    {
-                        conn.begin_pending(batch, slot, now);
-                    }
+                    // One owned body buffer handed off per flush — the
+                    // same shape as C++'s moved `body_scratch_`; `Conn`
+                    // keeps its own buffer warm for the next batch.
+                    infer.submit(id, conn.pcm().to_vec(), config.cpu_passes);
+                    conn.begin_pending(batch, now);
                     timers.push(Reverse((conn.deadline(), id)));
                 }
-                Tick::Timeout(slot) => {
-                    if let Some((owner, err)) = pool.abort(slot, poll.registry(), pool_token)
-                        && let Some(c) = conns.get_mut(&owner)
-                        && matches!(
-                            c.deliver(poll.registry(), Err(err), &config),
-                            Outcome::Close
-                        )
-                    {
-                        closing.push(owner);
-                    }
-                    if let Some(c) = conns.get_mut(&id) {
-                        timers.push(Reverse((c.deadline(), id)));
+                Tick::Timeout(elapsed_ms) => {
+                    let close = matches!(
+                        conn.deliver(
+                            poll.registry(),
+                            Err(inference::timeout_error(elapsed_ms)),
+                            &config,
+                        ),
+                        Outcome::Close
+                    );
+                    // Tell B to reclaim the slot; a late `Done` afterwards
+                    // is harmless (`deliver` no-ops with no `pending`).
+                    infer.abort(id);
+                    if close {
+                        closing.push(id);
+                    } else {
+                        timers.push(Reverse((conn.deadline(), id)));
                     }
                 }
             }
@@ -183,6 +197,9 @@ fn main() -> io::Result<()> {
 
         for id in closing {
             if let Some(mut conn) = conns.remove(&id) {
+                if conn.has_pending() {
+                    infer.abort(id);
+                }
                 conn.deregister(poll.registry());
             }
         }

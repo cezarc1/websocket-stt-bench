@@ -31,11 +31,12 @@ pub enum Outcome {
 pub enum Tick {
     Keep,
     /// Flush is due with a non-empty batch and nothing in flight — the
-    /// loop should `pool.submit` and then call [`Conn::begin_pending`].
+    /// loop should `infer.submit(..)` and then call [`Conn::begin_pending`].
     Flush(Batch),
-    /// The in-flight request exceeded the budget — the loop should
-    /// `pool.abort(slot)` and route the error back via [`Conn::deliver`].
-    Timeout(usize),
+    /// The in-flight request exceeded the budget (carries its elapsed ms).
+    /// The loop emits a timeout `error` via [`Conn::deliver`] and tells
+    /// the inference thread to drop the slot via `infer.abort(owner)`.
+    Timeout(f64),
 }
 
 pub fn ws_token(id: usize) -> Token {
@@ -60,7 +61,6 @@ pub struct Batch {
 
 struct Pending {
     batch: Batch,
-    slot: usize,
     started: Instant,
 }
 
@@ -172,7 +172,7 @@ impl Conn {
         if let Some(p) = &self.pending
             && now >= p.started + INFERENCE_TIMEOUT
         {
-            return Tick::Timeout(p.slot);
+            return Tick::Timeout(now.saturating_duration_since(p.started).as_secs_f64() * 1000.0);
         }
         if now < self.next_flush {
             return Tick::Keep;
@@ -197,15 +197,19 @@ impl Conn {
         })
     }
 
-    /// The loop secured a pool slot for `batch`; clear the buffer.
-    pub fn begin_pending(&mut self, batch: Batch, slot: usize, started: Instant) {
-        self.pending = Some(Pending {
-            batch,
-            slot,
-            started,
-        });
+    /// The loop handed `batch` to the inference thread; clear the buffer.
+    /// Frames arriving before the result accumulate again (back-pressure
+    /// as growing oldest-frame latency).
+    pub fn begin_pending(&mut self, batch: Batch, started: Instant) {
+        self.pending = Some(Pending { batch, started });
         self.pcm.clear();
         self.meta.clear();
+    }
+
+    /// True while a batch is awaiting the inference thread — the loop uses
+    /// this to decide whether a closing connection needs an `infer.abort`.
+    pub fn has_pending(&self) -> bool {
+        self.pending.is_some()
     }
 
     /// Inference finished (or errored / timed out): emit the partial.

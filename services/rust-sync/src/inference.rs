@@ -1,24 +1,61 @@
 //! Bounded **shared** pool of non-blocking HTTP/1.1 inference
-//! connections, owned by the event loop.
+//! connections, driven on a **dedicated OS thread** — *not* the
+//! WebSocket event loop.
+//!
+//! This is the deliberate architecture mirror of the C++23 gateway,
+//! which runs uWebSockets on its loop thread and libcurl-multi on a
+//! separate `std::jthread`. Here: the WS loop (thread A) hands batches
+//! over an `mpsc` channel; this module's [`run`] (thread B) owns its own
+//! `mio::Poll` and the [`InferencePool`], drives the HTTP/1.1 state
+//! machines, and routes results back over a second channel, waking
+//! thread A's poll via a [`mio::Waker`]. No async runtime, zero new
+//! dependencies — `std::thread` + `std::sync::mpsc` + `mio::Waker` is
+//! the canonical Rust spelling of C++'s queue + condvar + multi-wakeup.
 //!
 //! One socket per *in-flight request* (default 512, like rust-axum's
-//! reqwest pool) — NOT one per gateway connection. Opening a socket per
-//! session put ~N inference fds in the single epoll loop; at thousands of
-//! sessions that fd fan-out, not the inference server (measured ~1% CPU)
-//! or our own CPU (~66%), was the latency wall. A gateway connection
-//! borrows a free pooled socket for its single in-flight request and
-//! returns it on completion, so the one-inflight-per-connection invariant
-//! still holds and the loop's fd count stays bounded.
+//! reqwest pool) — NOT one per gateway connection. The one-inflight
+//! invariant stays structural on thread A (its per-`Conn` `pending`
+//! gate); this thread just executes submit/abort/drive.
 
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
-use std::time::Instant;
+use std::sync::mpsc::{Receiver, Sender};
+use std::time::{Duration, Instant};
 
 use mio::net::TcpStream;
-use mio::{Interest, Registry, Token};
+use mio::{Events, Interest, Poll, Registry, Token, Waker};
 
 use crate::config::Config;
 use crate::protocol::{ErrorKind, ErrorStage, InferResponse};
+
+/// Thread A → thread B. One per due flush (or abort).
+pub enum Cmd {
+    /// A batch is ready; run one inference for `owner`.
+    Submit {
+        owner: usize,
+        body: Vec<u8>,
+        cpu_passes: u32,
+    },
+    /// `owner` timed out or its WS closed on thread A; drop any in-flight
+    /// slot it holds so the socket/keep-alive is reclaimed.
+    Abort { owner: usize },
+}
+
+/// Thread B → thread A. Delivered to the owning `Conn::deliver`.
+pub type Done = (usize, Result<InferResponse, InferError>);
+
+const B_WAKE: Token = Token(0);
+
+/// Pool sockets occupy `Token(slot + 1)`; `Token(0)` ([`B_WAKE`]) is the
+/// cross-thread wake. `pool_slot` is the exact inverse — they must change
+/// together, so they live together.
+fn pool_token(slot: usize) -> Token {
+    Token(slot + 1)
+}
+
+fn pool_slot(token: Token) -> usize {
+    token.0 - 1
+}
 
 pub struct InferError {
     pub stage: ErrorStage,
@@ -27,6 +64,31 @@ pub struct InferError {
     pub status: Option<u16>,
     pub retryable: bool,
     pub elapsed_ms: f64,
+}
+
+/// The three transport-level failures (timeout, reset, abandoned dial)
+/// share everything but `kind`/`message`/`elapsed_ms`: an
+/// `InferenceRequest`-stage, retryable, status-less error.
+fn transport_error(kind: ErrorKind, message: String, elapsed_ms: f64) -> InferError {
+    InferError {
+        stage: ErrorStage::InferenceRequest,
+        kind,
+        message,
+        status: None,
+        retryable: true,
+        elapsed_ms,
+    }
+}
+
+/// A connection on thread A timed out its in-flight request. The error is
+/// built loop-side (it is derived from elapsed wall time, not the socket)
+/// so thread A never has to round-trip thread B to emit the partial.
+pub fn timeout_error(elapsed_ms: f64) -> InferError {
+    transport_error(
+        ErrorKind::Timeout,
+        "inference timed out".to_owned(),
+        elapsed_ms,
+    )
 }
 
 enum State {
@@ -85,7 +147,7 @@ impl Slot {
         self.registered = false;
     }
 
-    fn build(&mut self, config: &Config, body: &[u8]) {
+    fn build(&mut self, config: &Config, body: &[u8], cpu_passes: u32) {
         self.started = Instant::now();
         self.retried = false;
         self.resp.clear();
@@ -95,7 +157,7 @@ impl Slot {
             "POST {} HTTP/1.1\r\nHost: {}\r\nx-cpu-passes: {}\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n",
             config.inference_path,
             config.inference_host,
-            config.cpu_passes,
+            cpu_passes,
             body.len()
         );
         self.req.extend_from_slice(body);
@@ -215,25 +277,11 @@ impl Slot {
         }
         self.sock = None;
         self.state = State::Disconnected;
-        Step::Done(Err(InferError {
-            stage: ErrorStage::InferenceRequest,
-            kind: ErrorKind::ConnectionReset,
-            message: e.to_string(),
-            status: None,
-            retryable: true,
-            elapsed_ms: self.started.elapsed().as_secs_f64() * 1000.0,
-        }))
-    }
-
-    fn timeout_error(&self) -> InferError {
-        InferError {
-            stage: ErrorStage::InferenceRequest,
-            kind: ErrorKind::Timeout,
-            message: "inference timed out".to_owned(),
-            status: None,
-            retryable: true,
-            elapsed_ms: self.started.elapsed().as_secs_f64() * 1000.0,
-        }
+        Step::Done(Err(transport_error(
+            ErrorKind::ConnectionReset,
+            e.to_string(),
+            self.started.elapsed().as_secs_f64() * 1000.0,
+        )))
     }
 }
 
@@ -246,14 +294,14 @@ enum Step {
     Done(Result<InferResponse, InferError>),
 }
 
-pub struct InferencePool {
+struct InferencePool {
     addr: SocketAddr,
     slots: Vec<Slot>,
     free: Vec<usize>,
 }
 
 impl InferencePool {
-    pub fn new(addr: SocketAddr, size: usize) -> Self {
+    fn new(addr: SocketAddr, size: usize) -> Self {
         let mut slots = Vec::with_capacity(size);
         let mut free = Vec::with_capacity(size);
         for i in 0..size {
@@ -263,41 +311,44 @@ impl InferencePool {
         Self { addr, slots, free }
     }
 
-    /// Take a free slot for `owner`, build + start its request. Returns
-    /// the slot index, or `None` when the pool is exhausted (the caller
-    /// keeps its buffer — back-pressure as growing oldest-frame latency).
-    pub fn submit(
+    /// At least one request is mid-flight. Derived from the free-list so
+    /// there is no separate counter to keep in sync.
+    fn has_inflight(&self) -> bool {
+        self.free.len() != self.slots.len()
+    }
+
+    /// Take a free slot for `owner`, build + start its request. When the
+    /// pool is exhausted the request is reported as a retryable reset so
+    /// thread A emits an `error` frame and clears `pending` (the buffer
+    /// then keeps growing — back-pressure as oldest-frame latency).
+    fn submit(
         &mut self,
         owner: usize,
         body: &[u8],
+        cpu_passes: u32,
         config: &Config,
         reg: &Registry,
-        token: impl Fn(usize) -> Token,
-    ) -> Option<usize> {
-        let idx = self.free.pop()?;
+    ) -> Option<Done> {
+        let Some(idx) = self.free.pop() else {
+            return Some((owner, Err(reset_error())));
+        };
         let slot = &mut self.slots[idx];
         slot.owner = Some(owner);
-        slot.build(config, body);
+        slot.build(config, body, cpu_passes);
         if slot.sock.is_some() {
             slot.state = State::Sending { off: 0 };
         } else if slot.dial(self.addr).is_err() {
             slot.owner = None;
             self.free.push(idx);
-            return None;
+            return Some((owner, Err(reset_error())));
         }
-        slot.ensure_registered(reg, token(idx), Interest::WRITABLE);
-        Some(idx)
+        slot.ensure_registered(reg, pool_token(idx), Interest::WRITABLE);
+        None
     }
 
-    /// Drive a slot on its readiness event. `Some((owner, result))` when
-    /// the request completed; the slot is recycled for the next borrower.
-    pub fn on_event(
-        &mut self,
-        idx: usize,
-        writable: bool,
-        reg: &Registry,
-        token: impl Fn(usize) -> Token,
-    ) -> Option<(usize, Result<InferResponse, InferError>)> {
+    /// Drive a slot on its readiness event. `Some(done)` when the request
+    /// completed; the slot is recycled for the next borrower.
+    fn on_event(&mut self, idx: usize, writable: bool, reg: &Registry) -> Option<Done> {
         let slot = &mut self.slots[idx];
         match slot.drive(writable) {
             Step::Pending { want_writable } => {
@@ -306,51 +357,49 @@ impl InferencePool {
                 } else {
                     Interest::READABLE
                 };
-                slot.ensure_registered(reg, token(idx), interest);
+                slot.ensure_registered(reg, pool_token(idx), interest);
                 None
             }
             Step::Redial => {
                 if slot.dial(self.addr).is_err() {
                     let owner = slot.owner.take();
-                    self.recycle(idx, reg, token);
+                    self.recycle(idx, reg);
                     return owner.map(|o| (o, Err(reset_error())));
                 }
-                slot.ensure_registered(reg, token(idx), Interest::WRITABLE);
+                slot.ensure_registered(reg, pool_token(idx), Interest::WRITABLE);
                 None
             }
             Step::Done(result) => {
                 let owner = slot.owner.take();
-                self.recycle(idx, reg, token);
+                self.recycle(idx, reg);
                 owner.map(|o| (o, result))
             }
         }
     }
 
-    /// Abandon whatever a slot is doing (the borrower timed out) and
-    /// return the timeout error for its owner.
-    pub fn abort(
-        &mut self,
-        idx: usize,
-        reg: &Registry,
-        token: impl Fn(usize) -> Token,
-    ) -> Option<(usize, InferError)> {
+    /// Thread A timed out / closed `owner`. Abandon whatever slot it holds
+    /// (linear scan — aborts only happen on timeout/close, which are rare
+    /// relative to the ~thousands-of-flushes/s happy path). No `Done` is
+    /// produced: thread A already emitted the timeout/closed locally.
+    fn abort_owner(&mut self, owner: usize, reg: &Registry) {
+        let Some(idx) = self.slots.iter().position(|s| s.owner == Some(owner)) else {
+            return;
+        };
         let slot = &mut self.slots[idx];
-        let err = slot.timeout_error();
-        let owner = slot.owner.take();
+        slot.owner = None;
         slot.sock = None;
         slot.state = State::Disconnected;
-        self.recycle(idx, reg, token);
-        owner.map(|o| (o, err))
+        self.recycle(idx, reg);
     }
 
     /// Slot finished or was abandoned: keep its keep-alive socket (if any)
     /// registered readable so a server close is noticed, and make it
     /// available again.
-    fn recycle(&mut self, idx: usize, reg: &Registry, token: impl Fn(usize) -> Token) {
+    fn recycle(&mut self, idx: usize, reg: &Registry) {
         let slot = &mut self.slots[idx];
         slot.owner = None;
         if slot.sock.is_some() {
-            slot.ensure_registered(reg, token(idx), Interest::READABLE);
+            slot.ensure_registered(reg, pool_token(idx), Interest::READABLE);
         } else {
             slot.deregister(reg);
         }
@@ -358,15 +407,158 @@ impl InferencePool {
     }
 }
 
-fn reset_error() -> InferError {
-    InferError {
-        stage: ErrorStage::InferenceRequest,
-        kind: ErrorKind::ConnectionReset,
-        message: "inference connection reset".to_owned(),
-        status: None,
-        retryable: true,
-        elapsed_ms: 0.0,
+/// Thread A's handle to the inference thread. Pairs the command channel
+/// with the [`mio::Waker`] bound to thread B's poll, so every enqueue
+/// also unparks B — the Rust spelling of C++'s queue push +
+/// `curl_multi_wakeup()`. Called from the WS loop; never blocks (the
+/// channel is unbounded and the per-`Conn` one-inflight gate already
+/// bounds outstanding work to ≤ the connection count).
+pub struct InferHandle {
+    tx: Sender<Cmd>,
+    b_waker: Waker,
+}
+
+impl InferHandle {
+    pub fn submit(&self, owner: usize, body: Vec<u8>, cpu_passes: u32) {
+        let _ = self.tx.send(Cmd::Submit {
+            owner,
+            body,
+            cpu_passes,
+        });
+        let _ = self.b_waker.wake();
     }
+
+    pub fn abort(&self, owner: usize) {
+        let _ = self.tx.send(Cmd::Abort { owner });
+        let _ = self.b_waker.wake();
+    }
+}
+
+/// Spawn the inference thread. `a_waker` is the WS loop's own
+/// [`mio::Waker`] (bound to its `RESULT_WAKER` token); thread B fires it
+/// after pushing completions so the loop drains `done_rx` promptly
+/// instead of on its next timer wake. Returns the WS-side handle + the
+/// result receiver.
+pub fn spawn(
+    addr: SocketAddr,
+    size: usize,
+    config: Config,
+    a_waker: Waker,
+) -> io::Result<(InferHandle, Receiver<Done>)> {
+    let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<Cmd>();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<Done>();
+
+    let poll = Poll::new()?;
+    let b_waker = Waker::new(poll.registry(), B_WAKE)?;
+
+    std::thread::Builder::new()
+        .name("stt-inference".to_owned())
+        .spawn(move || run(poll, addr, size, config, cmd_rx, done_tx, a_waker))?;
+
+    Ok((
+        InferHandle {
+            tx: cmd_tx,
+            b_waker,
+        },
+        done_rx,
+    ))
+}
+
+/// Thread B. Owns the pool + its own epoll. Never returns. A panic in
+/// either loop is a fatal, unrecoverable bug (not a handled condition):
+/// if thread A dies, `done_tx.send` errors are dropped here and B parks
+/// harmlessly until the process is killed — there is intentionally no
+/// cross-thread supervision.
+fn run(
+    mut poll: Poll,
+    addr: SocketAddr,
+    size: usize,
+    config: Config,
+    cmd_rx: Receiver<Cmd>,
+    done_tx: Sender<Done>,
+    a_waker: Waker,
+) {
+    let mut events = Events::with_capacity(4096);
+    let mut pool = InferencePool::new(addr, size);
+
+    loop {
+        if poll
+            .poll(&mut events, compute_poll_timeout(pool.has_inflight()))
+            .is_err()
+        {
+            continue;
+        }
+
+        let mut produced = false;
+
+        for event in events.iter() {
+            if event.token() == B_WAKE {
+                continue;
+            }
+            if let Some(done) = pool.on_event(
+                pool_slot(event.token()),
+                event.is_writable(),
+                poll.registry(),
+            ) && done_tx.send(done).is_ok()
+            {
+                produced = true;
+            }
+        }
+
+        // One B_WAKE coalesces N enqueues; drain them all.
+        while let Ok(cmd) = cmd_rx.try_recv() {
+            match cmd {
+                Cmd::Submit {
+                    owner,
+                    body,
+                    cpu_passes,
+                } => {
+                    if let Some(done) =
+                        pool.submit(owner, &body, cpu_passes, &config, poll.registry())
+                        && done_tx.send(done).is_ok()
+                    {
+                        produced = true;
+                    }
+                }
+                Cmd::Abort { owner } => pool.abort_owner(owner, poll.registry()),
+            }
+        }
+
+        if produced {
+            let _ = a_waker.wake();
+        }
+    }
+}
+
+/// How long thread B parks in `poll.poll(timeout)` each iteration.
+///
+/// This is a direct port of the proven C++ design
+/// (`services/cpp23-uwebsockets/src/inference.cpp::wait_for_work` +
+/// `kActivePollTimeoutMs = 10`): relying on socket-readiness wakeups
+/// *alone* to advance a request's state machine can stall completions
+/// for ~1 s under load when an expected wakeup for an intermediate
+/// transition is never delivered (the keep-alive `State::Idle` probe,
+/// the `Redial` resend, a partial-read resume — for C++ it was h2c
+/// state transitions). Capping the park guarantees the state machines
+/// are pumped regularly even with no readiness event.
+///
+/// - **Active** (≥1 request in flight): 10 ms ceiling — short enough that
+///   a missed transition costs at most ~10 ms, cheap enough that the busy
+///   loop is bounded.
+/// - **Idle**: 1000 ms — effectively "until woken", since thread A's
+///   `Cmd` enqueue fires B's [`Waker`] immediately; the bounded value is
+///   only a safety net against an ever-missed wake, mirroring C++'s
+///   `queue_cv_.wait_for(1000ms)`.
+fn compute_poll_timeout(has_inflight: bool) -> Option<Duration> {
+    Some(Duration::from_millis(if has_inflight { 10 } else { 1000 }))
+}
+
+fn reset_error() -> InferError {
+    transport_error(
+        ErrorKind::ConnectionReset,
+        "inference connection reset".to_owned(),
+        0.0,
+    )
 }
 
 type ParseErr = (ErrorStage, ErrorKind, String, Option<u16>);

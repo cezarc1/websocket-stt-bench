@@ -2,10 +2,11 @@
 //!
 //! Mirrors the env contract every gateway in this benchmark shares
 //! (`PORT`, `INFERENCE_URL`, `CPU_PASSES`, `MODEL_DELAY_MS`,
-//! `FLUSH_INTERVAL_MS`, `FLUSH_PHASE_JITTER_MS`). `WORKER_THREADS` /
-//! `INFERENCE_HTTP_CLIENTS` are accepted for compose/Helm symmetry but
-//! unused: this gateway is a single epoll event loop, not threads or a
-//! client pool.
+//! `FLUSH_INTERVAL_MS`, `FLUSH_PHASE_JITTER_MS`). `INFERENCE_HTTP_CLIENTS`
+//! sizes the shared inference connection pool on the inference thread.
+//! `WORKER_THREADS` is accepted for compose/Helm symmetry but unused: the
+//! topology is fixed at two threads (a WebSocket epoll loop + a dedicated
+//! inference epoll loop), not a tunable worker count.
 
 use std::env;
 use std::time::Duration;
