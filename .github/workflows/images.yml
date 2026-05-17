@@ -21,6 +21,8 @@ on:
       - "services/java-helidon-nima/**"
       - "services/scala-pekko/**"
       - "services/cpp23-uwebsockets/**"
+      - "services/ocaml-oxcaml/**"
+      - "services/ocaml-websocket-async/**"
       - "versions.lock.toml"
   push:
     branches: ["main"]
@@ -44,6 +46,8 @@ on:
       - "services/java-helidon-nima/**"
       - "services/scala-pekko/**"
       - "services/cpp23-uwebsockets/**"
+      - "services/ocaml-oxcaml/**"
+      - "services/ocaml-websocket-async/**"
       - "versions.lock.toml"
   workflow_dispatch:
 
@@ -119,6 +123,11 @@ jobs:
               DEBIAN_RUNTIME_IMAGE=debian:12-slim
               OXCAML_SWITCH=5.2.0+ox
               OXCAML_REPO_COMMIT=main
+          - image: ocaml-websocket-async
+            dockerfile: docker/ocaml-websocket-async.Dockerfile
+            build_args: |
+              OPAM_BASE_IMAGE=ocaml/opam:debian-12-ocaml-5.4
+              DEBIAN_RUNTIME_IMAGE=debian:12-slim
           - image: loadgen
             dockerfile: docker/loadgen-rust.Dockerfile
             build_args: ""

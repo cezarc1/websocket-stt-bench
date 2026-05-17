@@ -61,6 +61,13 @@ x-ocaml-build: &ocaml-build
     OXCAML_SWITCH: "5.2.0+ox"
     OXCAML_REPO_COMMIT: "main"
 
+x-ocaml-websocket-build: &ocaml-websocket-build
+  context: .
+  dockerfile: docker/ocaml-websocket-async.Dockerfile
+  args:
+    OPAM_BASE_IMAGE: "ocaml/opam:debian-12-ocaml-5.4"
+    DEBIAN_RUNTIME_IMAGE: "debian:12-slim"
+
 # FLUSH_INTERVAL_MS: gateway-to-inference batch cadence. Clients still upload
 # 20 ms PCM frames immediately, but gateways flush larger per-session batches
 # to reduce backend request overhead. The primary benchmark profile uses 1000 ms.
@@ -171,6 +178,15 @@ x-ocaml-env: &ocaml-env
   FLUSH_INTERVAL_MS: "1000"
   FLUSH_PHASE_JITTER_MS: "1000"
   PORT: "9000"
+  INFERENCE_URL: "http://inference-server:9000"
+
+x-ocaml-websocket-env: &ocaml-websocket-env
+  CPU_PASSES: "4"
+  MODEL_DELAY_MS: "75"
+  INFERENCE_HTTP_CLIENTS: "4"
+  FLUSH_INTERVAL_MS: "1000"
+  FLUSH_PHASE_JITTER_MS: "1000"
+  PORT: "9100"
   INFERENCE_URL: "http://inference-server:9000"
 
 # All gateway services depend on a healthy inference-server. Without this,
@@ -567,6 +583,31 @@ services:
       WORKER_THREADS: "4"
     ports:
       - "9001:9000"
+
+  # Stock OCaml 5.4.1 + Async raw WebSocket gateway for upstream-OCaml
+  # behavior without the OxCaml compiler/runtime fork.
+  ocaml-websocket-async-single:
+    <<: *app-single
+    mem_limit: 2g
+    profiles: ["single"]
+    build: *ocaml-websocket-build
+    depends_on: *needs-inference
+    environment:
+      <<: *ocaml-websocket-env
+      WORKER_THREADS: "1"
+    ports:
+      - "9101:9100"
+
+  ocaml-websocket-async-multi:
+    <<: *app-multi
+    profiles: ["multi"]
+    build: *ocaml-websocket-build
+    depends_on: *needs-inference
+    environment:
+      <<: *ocaml-websocket-env
+      WORKER_THREADS: "4"
+    ports:
+      - "9101:9100"
 
   loadgen:
     <<: *loadgen-limits

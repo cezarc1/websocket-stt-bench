@@ -1,0 +1,20 @@
+(lang dune 3.11)
+(name stt_ocaml_websocket_async)
+
+(formatting
+ (enabled_for ocaml))
+
+(package
+ (name stt_ocaml_websocket_async)
+ (synopsis "Stock OCaml Async/WebSocket STT gateway")
+ (description
+  "A speech-to-text WebSocket gateway implementing the websocket-stt-bench protocol on stock OCaml with Async and a raw WebSocket transport.")
+ (depends
+  (ocaml (= 5.4.1))
+  dune
+  core
+  core_unix
+  async
+  yojson
+  ppx_jane
+  alcotest))

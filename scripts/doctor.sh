@@ -104,8 +104,9 @@ if [ ! -x "$BAZEL_BIN" ]; then
   echo "bazelisk: missing $BAZEL_BIN; run: just ensure-bazelisk" >&2
   exit 1
 fi
-# bazelisk reports as "Bazelisk version: 1.29.0" (or "v1.29.0" on some releases).
-BAZELISK_ACTUAL="$("$BAZEL_BIN" --version 2>/dev/null | awk '/^Bazelisk version:/ { print $3 }' | sed 's/^v//')"
+# Bazelisk 1.29 reports the resolved Bazel version from `--version`; the
+# launcher version itself is in `bazel version` as "Bazelisk version: v1.29.0".
+BAZELISK_ACTUAL="$("$BAZEL_BIN" version 2>/dev/null | awk '/^Bazelisk version:/ { print $3 }' | sed 's/^v//')"
 expect_version "$BAZELISK_ACTUAL" "$BAZELISK_EXPECTED" "bazelisk"
 
 # OCaml / OxCaml: the switch is created lazily by `just ensure-oxcaml-switch`.
@@ -113,6 +114,7 @@ expect_version "$BAZELISK_ACTUAL" "$BAZELISK_EXPECTED" "bazelisk"
 # switch-creation step is too expensive to require on every `just check`.
 OPAM_EXPECTED="$(version_value ocaml opam)"
 OXCAML_SWITCH_EXPECTED="$(version_value ocaml oxcaml_switch)"
+OCAML_STOCK_SWITCH_EXPECTED="${OCAML_STOCK_SWITCH:-$(version_value ocaml_stock opam_switch)}"
 OPAM_BIN="$ROOT/.tools/bin/opam"
 if [ ! -x "$OPAM_BIN" ]; then
   echo "opam: missing $OPAM_BIN; run: just ensure-opam" >&2
@@ -124,6 +126,9 @@ expect_version "$("$OPAM_BIN" --version | head -n1)" "$OPAM_EXPECTED" "opam"
 # so first-time contributors learn what to run without blocking other checks.
 if ! "$OPAM_BIN" switch list --short 2>/dev/null | grep -qx "$OXCAML_SWITCH_EXPECTED"; then
   echo "doctor note: OxCaml switch $OXCAML_SWITCH_EXPECTED not yet created; run: just ensure-oxcaml-switch" >&2
+fi
+if ! "$OPAM_BIN" switch list --short 2>/dev/null | grep -qx "$OCAML_STOCK_SWITCH_EXPECTED"; then
+  echo "doctor note: stock OCaml switch $OCAML_STOCK_SWITCH_EXPECTED not yet created; run: just ensure-stock-ocaml-switch" >&2
 fi
 
 docker version --format '{{.Client.Version}}' >/dev/null

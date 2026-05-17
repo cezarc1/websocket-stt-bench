@@ -13,9 +13,10 @@ BIN_DIR="$TOOLS_DIR/bin"
 INSTALL_DIR="$TOOLS_DIR/bazelisk-$BAZELISK_VERSION"
 BAZEL_BIN="$INSTALL_DIR/bazel"
 
-# bazelisk reports its version with `--version`, e.g. "Bazelisk version: 1.29.0".
+# Bazelisk 1.29 reports the resolved Bazel version from `--version`; the
+# launcher version itself is in `bazel version` as "Bazelisk version: v1.29.0".
 if [ -x "$BAZEL_BIN" ]; then
-  installed="$("$BAZEL_BIN" --version 2>/dev/null | awk '/^Bazelisk version:/ { print $3 }')"
+  installed="$("$BAZEL_BIN" version 2>/dev/null | awk '/^Bazelisk version:/ { print $3 }')"
   if [ "$installed" = "v$BAZELISK_VERSION" ] || [ "$installed" = "$BAZELISK_VERSION" ]; then
     mkdir -p "$BIN_DIR"
     ln -sf "../bazelisk-$BAZELISK_VERSION/bazel" "$BIN_DIR/bazel"

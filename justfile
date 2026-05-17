@@ -44,6 +44,9 @@ ensure-opam:
 ensure-oxcaml-switch: ensure-opam
     bash scripts/ensure-oxcaml-switch.sh
 
+ensure-stock-ocaml-switch: ensure-opam
+    bash scripts/ensure-stock-ocaml-switch.sh
+
 py-lock: ensure-uv
     bash scripts/py-sync.sh lock
 
@@ -194,7 +197,24 @@ ocaml-test: ensure-oxcaml-switch
 ocaml-fmt: ensure-oxcaml-switch
     cd services/ocaml-oxcaml && opam exec --switch "$(awk -F\" '/oxcaml_switch =/{print $2; exit}' ../../versions.lock.toml)" -- dune build @fmt --auto-promote --root .
 
-check: doctor python-check analysis-check ts-check go-check elixir-check rust-check java-check scala-check cpp-check ocaml-check
+# Stock OCaml Async/WebSocket gateway. By default this uses the pinned
+# `ocaml_stock.opam_switch`; set OCAML_STOCK_SWITCH=default to reuse an existing
+# stock 5.4.1 switch on a local machine.
+ocaml-websocket-async-deps: ensure-stock-ocaml-switch
+    cd services/ocaml-websocket-async && stock_switch="${OCAML_STOCK_SWITCH:-$(awk -F\" '/opam_switch =/{print $2; exit}' ../../versions.lock.toml)}"; opam exec --switch "$stock_switch" -- dune build @check --root .
+
+ocaml-websocket-async-check: ensure-stock-ocaml-switch
+    cd services/ocaml-websocket-async && stock_switch="${OCAML_STOCK_SWITCH:-$(awk -F\" '/opam_switch =/{print $2; exit}' ../../versions.lock.toml)}"; opam exec --switch "$stock_switch" -- dune build @fmt --root .
+    cd services/ocaml-websocket-async && stock_switch="${OCAML_STOCK_SWITCH:-$(awk -F\" '/opam_switch =/{print $2; exit}' ../../versions.lock.toml)}"; opam exec --switch "$stock_switch" -- dune build --profile release --root .
+    cd services/ocaml-websocket-async && stock_switch="${OCAML_STOCK_SWITCH:-$(awk -F\" '/opam_switch =/{print $2; exit}' ../../versions.lock.toml)}"; opam exec --switch "$stock_switch" -- dune runtest --root .
+
+ocaml-websocket-async-test: ensure-stock-ocaml-switch
+    cd services/ocaml-websocket-async && stock_switch="${OCAML_STOCK_SWITCH:-$(awk -F\" '/opam_switch =/{print $2; exit}' ../../versions.lock.toml)}"; opam exec --switch "$stock_switch" -- dune runtest --root .
+
+ocaml-websocket-async-fmt: ensure-stock-ocaml-switch
+    cd services/ocaml-websocket-async && stock_switch="${OCAML_STOCK_SWITCH:-$(awk -F\" '/opam_switch =/{print $2; exit}' ../../versions.lock.toml)}"; opam exec --switch "$stock_switch" -- dune build @fmt --auto-promote --root .
+
+check: doctor python-check analysis-check ts-check go-check elixir-check rust-check java-check scala-check cpp-check ocaml-check ocaml-websocket-async-check
 
 bench-ladder service_name service_url:
     # Build the loadgen with full release optimization ONCE up front. Running
@@ -248,7 +268,8 @@ conformance: compose-build
       java-helidon-nima-single \
       scala-pekko-single \
       cpp23-uwebsockets-single \
-      ocaml-oxcaml-single; \
+      ocaml-oxcaml-single \
+      ocaml-websocket-async-single; \
     docker compose --profile loadgen run --rm --no-deps \
       --entrypoint /usr/local/bin/stt-conformance \
       loadgen \
@@ -262,7 +283,8 @@ conformance: compose-build
       --service java-helidon-nima-single=ws://java-helidon-nima-single:5000/ws/stt \
       --service scala-pekko-single=ws://scala-pekko-single:2500/ws/stt \
       --service cpp23-uwebsockets-single=ws://cpp23-uwebsockets-single:1500/ws/stt \
-      --service ocaml-oxcaml-single=ws://ocaml-oxcaml-single:9000/ws/stt
+      --service ocaml-oxcaml-single=ws://ocaml-oxcaml-single:9000/ws/stt \
+      --service ocaml-websocket-async-single=ws://ocaml-websocket-async-single:9100/ws/stt
 
 compose-single:
     docker compose --profile single up --build

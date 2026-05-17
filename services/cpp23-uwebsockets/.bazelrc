@@ -48,6 +48,13 @@ build:tidy --output_groups=report
 # Use the hermetic Clang toolchain registered in MODULE.bazel.
 build --incompatible_enable_cc_toolchain_resolution
 
+# Bazel 9 stops autoloading language rules by default. Hedron's compile-commands
+# extractor still calls native py_binary/cc_binary internally, so allow autoloading for
+# that dev-only target until the extractor migrates to explicit rules_python/rules_cc
+# loads.
+common --incompatible_autoload_externally=+@rules_python,+@rules_cc
+common --noincompatible_disable_autoloads_in_main_repo
+
 # Test output: print stdout/stderr of failed tests inline.
 test --test_output=errors
 

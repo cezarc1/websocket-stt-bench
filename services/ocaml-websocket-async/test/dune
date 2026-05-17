@@ -1,0 +1,5 @@
+(test
+ (name test_stt_ocaml_websocket_async)
+ (libraries alcotest core async stt_ocaml_websocket_async yojson)
+ (preprocess
+  (pps ppx_jane)))

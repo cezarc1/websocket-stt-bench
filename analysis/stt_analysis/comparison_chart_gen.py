@@ -25,13 +25,14 @@ import matplotlib.pyplot as plt
 
 # (name, sessions at 1 vCPU, LOC, label dx_pts, dy_pts, horizontal alignment)
 RUNTIMES: list[tuple[str, int, int, int, int, str]] = [
+    ("Rust / mio", 4400, 1221, 10, -16, "left"),
     ("C++23 / uWebSockets", 4350, 1551, -10, -14, "right"),
-    ("Rust / Axum", 3475, 696, -10, 10, "right"),
-    ("Rust / sync (2-thread, no runtime)", 4400, 1221, 10, -16, "left"),
-    ("Java / Helidon Nima", 2600, 917, 10, 10, "left"),
+    ("Async Rust / Tokio", 3475, 696, -10, 10, "right"),
+    ("Java / Helidon Nima", 2625, 917, 10, 10, "left"),
     ("TypeScript / Bun", 2550, 734, 10, -14, "left"),
     ("Go / net/http", 2500, 893, 10, -14, "left"),
     ("OCaml / OxCaml", 2075, 1235, 10, 10, "left"),
+    ("OCaml / Async raw", 1930, 1236, 10, -14, "left"),
     ("Scala / Pekko", 1400, 726, 10, -14, "left"),
     ("Elixir / Phoenix", 1250, 784, 10, 10, "left"),
     ("Python (uvloop + FastAPI)", 1100, 678, -10, 10, "right"),
@@ -40,8 +41,8 @@ RUNTIMES: list[tuple[str, int, int, int, int, str]] = [
 # Strict Pareto-optimal points: no other runtime has BOTH higher sessions
 # AND lower LOC. Highlighted in yellow in the rendered chart.
 PARETO = {
-    "Rust / sync (2-thread, no runtime)",
-    "Rust / Axum",
+    "Rust / mio",
+    "Async Rust / Tokio",
     "Python (uvloop + FastAPI)",
 }
 

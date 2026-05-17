@@ -4,7 +4,7 @@
 
 | Shape | Result | Bottleneck |
 |---|---:|---|
-| 1 vCPU / 2 GiB | 2600 upper bound | latency, then heap/OOM cliff |
+| 1 vCPU / 2 GiB | 2625 upper bound | latency, then heap/OOM cliff |
 | 2 vCPU / 2 GiB | 3750 upper bound | tail latency, then heap/OOM cliff |
 
 Java is the strongest GC'd runtime in this benchmark. It stays in the Rust-adjacent band, but higher probes show heap pressure in the Helidon WebSocket read path under the 2 GiB pod limit.
