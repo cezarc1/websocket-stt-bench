@@ -14,7 +14,7 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 
 | Runtime | LOC | 1 vCPU | 2 vCPU | Bottleneck | Details |
 |---|---:|---:|---:|---|---|
-| **[C++23](https://en.cppreference.com/w/cpp/23) + [uWebSockets 20.77](https://github.com/uNetworking/uWebSockets)** | 1.6k | **4450** | **TBD** | CPU/latency | [runs](services/cpp23-uwebsockets/BENCHMARK.md) |
+| **[C++23](https://en.cppreference.com/w/cpp/23) + [uWebSockets 20.77](https://github.com/uNetworking/uWebSockets)** | 1.6k | **4350**◆ | **TBD** | newest-p50 latency | [runs](services/cpp23-uwebsockets/BENCHMARK.md) |
 | **[Rust 1.95](https://github.com/rust-lang/rust) + [Axum](https://github.com/tokio-rs/axum) / [Tokio](https://github.com/tokio-rs/tokio)** | 696 | **3475** | **4250** (1.22X) | CPU | [runs](services/rust-axum/BENCHMARK.md) |
 | **[Rust 1.95](https://github.com/rust-lang/rust) — evented (`mio` epoll, **no async runtime**)** | 1111 | **3150**¶ | replica-only | clean newest-p50 latency edge, zero errors | [runs](services/rust-sync/BENCHMARK.md) |
 | **[Java 25 LTS](https://openjdk.org/projects/jdk/25/) + [Helidon Níma 4.3](https://helidon.io/)** | 917 | 2600‡ | 3750 (1.44X) | latency, then heap/OOM cliff | [runs](services/java-helidon-nima/BENCHMARK.md) |
@@ -30,6 +30,7 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 ‡ 1 vCPU / 2 GiB memory. The 1 GiB shape also OOMs near the edge, so the bumped 2 GiB shape is reported.
 § OxCaml runs one Async domain; a 2-vCPU pod does not use the second core meaningfully. Replica fan-out reached 3350 / 1.61X.
 ¶ Synchronous Rust with **no async runtime** — a single hand-rolled `mio`/epoll event loop + a bounded shared inference connection pool. 3150 confirmed ↔ 3300 first solid fail, a clean newest-p50 latency edge with zero errors. Reaches the async-Rust tier (~91% of Tokio's 3475, ~3.8× a naive thread-per-connection baseline) but does not beat it: the residual is hand-rolled-`mio` + HTTP/1.1 vs Tokio's mature reactor + reqwest HTTP/2 multiplexing on the identical single-thread/1-vCPU constraint. A single loop is one core, so 2-vCPU scales by replica fan-out, not in-pod.
+◆ Re-validated 2026-05-17 on the crash-fixed image: **4350 confirmed (2/2) ↔ 4400 first solid fail (2/2)**, a clean newest-p50 latency edge with zero errors and zero crashes through the whole 50→4450 sweep. The earlier 4450 was measured on a binary that SIGSEGVs under load (a `WsSink` use-after-free + a Bazel-9 build break — both fixed here); the fix trades ~2% steady-state capacity (`shared_ptr` + virtual dispatch on the hot send path) for correctness, so 4350 is the honest reproducible ceiling. See [runs](services/cpp23-uwebsockets/BENCHMARK.md).
 
 The above numbers are the highest confirmed session counts that passed the SLO at the given vCPU shape. Detailed brackets, tables, and run notes live in the linked service benchmark docs.
 
@@ -45,7 +46,7 @@ The above numbers are the highest confirmed session counts that passed the SLO a
 - **OxCaml got close to Java only after raw transport work:** persistent keep-alive + zero-copy framing moved the confirmed ceiling from 1050 to 2075.
 - **Free-threaded Python with this FastAPI/Granian stack is reliability-limited today; treat it as a stack result, not a verdict on no-GIL Python.**
 
-**Pareto frontier:** Python (678 LOC / 1100 sessions, leanest) · Rust/Axum (696 LOC / 3475, best balance) · C++23 (1551 LOC / 4450, most capacity). The evented no-runtime Rust gateway (1111 LOC / 3150) is dominated by Rust/Axum on both axes — strictly the "how close can you get without Tokio" experiment, ~9% short at higher LOC.
+**Pareto frontier:** Python (678 LOC / 1100 sessions, leanest) · Rust/Axum (696 LOC / 3475, best balance) · C++23 (1551 LOC / 4350, most capacity). The evented no-runtime Rust gateway (1111 LOC / 3150) is dominated by Rust/Axum on both axes — strictly the "how close can you get without Tokio" experiment, ~9% short at higher LOC.
 
 ## The SLO: what "passing" means
 
@@ -116,7 +117,7 @@ The load-bearing invariant is one in-flight inference request per connection. Ev
 
 | If you optimize for | Pick | Why |
 |---|---|---|
-| Lowest dollars per session | C++23/uWebSockets | 4450 sessions/vCPU |
+| Lowest dollars per session | C++23/uWebSockets | 4350 sessions/vCPU |
 | Lowest dollars with memory safety | Rust/Axum | 3475 sessions/vCPU with compact code |
 | Rust-adjacent JVM capacity | Java/Helidon Níma | 2600 sessions/vCPU; watch heap at the cliff |
 | JS ecosystem with strong capacity | TypeScript on Bun | 2550 sessions/vCPU on native Bun primitives |

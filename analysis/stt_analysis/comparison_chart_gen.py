@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 
 # (name, sessions at 1 vCPU, LOC, label dx_pts, dy_pts, horizontal alignment)
 RUNTIMES: list[tuple[str, int, int, int, int, str]] = [
-    ("C++23 / uWebSockets", 4450, 1551, -10, -14, "right"),
+    ("C++23 / uWebSockets", 4350, 1551, -10, -14, "right"),
     ("Rust / Axum", 3475, 696, -10, 10, "right"),
     ("Rust / sync (no runtime)", 3150, 1111, 10, -16, "left"),
     ("Java / Helidon Nima", 2600, 917, 10, 10, "left"),
