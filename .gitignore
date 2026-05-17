@@ -23,6 +23,8 @@
 /services/typescript-bun/node_modules/
 /services/ocaml-oxcaml/_build/
 /services/ocaml-oxcaml/_opam/
+/services/ocaml-websocket-async/_build/
+/services/ocaml-websocket-async/_opam/
 
 # Bazel writes convenience symlinks (`bazel-bin`, `bazel-out`, `bazel-testlogs`,
 # `bazel-<workspace>`) into the workspace root. `.tools/` already covers

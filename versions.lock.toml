@@ -179,7 +179,7 @@ ppx_jane = "latest"
 # `digestif` dep doesn't build on the OxCaml 5.2.0+ox switch invariant
 # (mode-system mismatch in baijiu_rmd160.ml). Both the HTTP/1.1 server +
 # inference client and the WebSocket framing/handshake are now hand-rolled
-# on top of raw `Async.Tcp` (see lib/server.ml, lib/ws_frame.ml,
+# on top of raw `Async.Tcp` (see lib/server.ml, lib/websocket_frame.ml,
 # lib/inference.ml). RFC 6455 framing is ~200 LOC.
 # HTTP/1.1 client for the inference POST. The inference server (axum)
 # accepts both HTTP/1.1 and HTTP/2 cleartext on the same listener, so we
@@ -198,4 +198,25 @@ alcotest = "1.8.0"
 # TODO: pin both images by sha256 digest before merging (run
 # `docker pull ocaml/opam:debian-12-ocaml-5.2 && docker inspect --format='{{index .RepoDigests 0}}' ...`).
 opam_debian_12 = "ocaml/opam:debian-12-ocaml-5.2"
+debian_slim = "debian:12-slim"
+
+[ocaml_stock]
+# Stock upstream OCaml comparison point for the OxCaml gateway. The local
+# recipes create/use this opam switch unless OCAML_STOCK_SWITCH overrides it
+# (useful when a machine already has a stock 5.4.1 "default" switch).
+version = "5.4.1"
+opam_switch = "5.4.1"
+
+[ocaml_stock.dependencies]
+ocamlformat = "0.29.0"
+dune = "latest"
+core = "latest"
+core_unix = "latest"
+async = "latest"
+yojson = "latest"
+ppx_jane = "latest"
+alcotest = "latest"
+
+[containers.ocaml_stock]
+opam_debian_12 = "ocaml/opam:debian-12-ocaml-5.4"
 debian_slim = "debian:12-slim"
