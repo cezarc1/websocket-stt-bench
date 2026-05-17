@@ -10,7 +10,7 @@ I bench:
 - C++23 - uWebSockets/uSockets on Linux epoll
 - Python 3.14.4 and 3.14.4t - FastAPI, uvloop, Granian
 - Elixir 1.19.5 - Phoenix + Bandit on BEAM, raw WebSock
-- Rust 1.95 - async Axum/Tokio, and a no-async-runtime two-thread `mio`/epoll build
+- Rust 1.95 - async Axum/Tokio, and a two-thread `mio`/epoll build
 - TypeScript - Bun 1.3.13, Bun.serve WebSockets
 - Go 1.26.3 - net/http and coder/websocket
 - Java 25 LTS - Helidon Níma with virtual threads
@@ -43,10 +43,10 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 † Python scales out at 2 vCPU by adding worker processes; each Granian worker owns one asyncio loop.
 ‡ 1 vCPU / 2 GiB memory. The 1 GiB shape also OOMs near the edge, so the bumped 2 GiB shape is reported.
 § OxCaml runs one Async domain; a 2-vCPU pod does not use the second core meaningfully. Replica fan-out reached 3350 / 1.61X.
-¶ No async runtime, zero new dependencies, plain HTTP/1.1. Two OS threads — a `mio`/epoll WebSocket loop + a dedicated inference loop (`std::sync::mpsc` + `mio::Waker`), the structural mirror of C++'s uWebSockets-loop + libcurl-`jthread`. 1 vCPU: **4400 confirmed (2/2) ↔ 4500 borderline ↔ 4600 first solid fail (2/2)**; 2 vCPU: **5500 confirmed ↔ 5600 first fail** (~1.25× in-pod; the prior single-loop revision was replica-only). Zero errors/restarts across 50→7000. Three-stage journey and per-point tables: [runs](services/rust-sync/BENCHMARK.md).
-◆ Re-validated 2026-05-17 on the crash-fixed image: **4350 confirmed (2/2) ↔ 4400 first solid fail (2/2)**, a clean newest-p50 latency edge with zero errors and zero crashes through the whole 50→4450 sweep. The earlier 4450 was measured on a binary that SIGSEGVs under load (a `WsSink` use-after-free + a Bazel-9 build break — both fixed here); the fix trades ~2% steady-state capacity (`shared_ptr` + virtual dispatch on the hot send path) for correctness, so 4350 is the honest reproducible ceiling. See [runs](services/cpp23-uwebsockets/BENCHMARK.md).
+¶ No async runtime, zero new dependencies, plain HTTP/1.1. Two OS threads — a `mio`/epoll WebSocket loop + a dedicated inference loop (`std::sync::mpsc` + `mio::Waker`). [runs](services/rust-sync/BENCHMARK.md).
+◆ Re-validated 2026-05-17 on the crash-fixed image: **4350 confirmed (2/2) ↔ 4400 first solid fail (2/2)**. See [runs](services/cpp23-uwebsockets/BENCHMARK.md).
 
-LOC note: the TL;DR and chart use application LOC. For both OCaml raw-transport variants, that excludes the generic first-party WebSocket/HTTP/SHA-1/base64 transport shim that package-backed runtimes get from dependencies. Comments and blank lines are not counted.
+LOC note: the TL;DR and chart use LOC. For both OCaml raw-transport variants, that excludes the generic first-party WebSocket/HTTP/SHA-1/base64 transport shim that package-backed runtimes get from dependencies. Comments and blank lines are not counted.
 
 The above numbers are the highest confirmed session counts that passed the SLO at the given vCPU shape. Detailed brackets, tables, and run notes live in the linked service benchmark docs.
 
