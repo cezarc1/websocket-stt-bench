@@ -50,6 +50,11 @@ public:
 
     virtual void send(std::string_view payload) = 0;
     virtual void close_with(int code, std::string_view reason) = 0;
+    // Permanently neutralize the sink. The WS close handler calls this
+    // BEFORE the underlying socket is freed, so any later `send`/`close_with`
+    // (e.g. a deferred inference completion) is an inert no-op instead of
+    // dereferencing a dangling `uWS::WebSocket*`.
+    virtual void mark_closed() noexcept = 0;
 };
 
 // Schedules a task back onto the Session's owning event loop. Production wraps
@@ -78,8 +83,12 @@ class Session : public std::enable_shared_from_this<Session> {
 public:
     // Scheduler by `shared_ptr` so an in-flight inference callback can
     // keep it alive across Session destruction.
-    Session(const Config& config, InferenceClient& inference, OutboundSink& sink,
-            std::shared_ptr<Scheduler> scheduler);
+    // Sink by `shared_ptr` (not a reference): an in-flight inference
+    // callback can outlive the WS close, and owning the sink keeps it
+    // alive — but inert via `mark_closed()` — so the callback's `send`
+    // can never touch a freed socket.
+    Session(const Config& config, InferenceClient& inference,
+            std::shared_ptr<OutboundSink> sink, std::shared_ptr<Scheduler> scheduler);
 
     void on_text(std::string_view text);
     void on_binary(std::span<const std::byte> payload);
@@ -114,7 +123,7 @@ private:
 
     const Config& config_;
     InferenceClient& inference_;
-    OutboundSink& sink_;
+    std::shared_ptr<OutboundSink> sink_;
     std::shared_ptr<Scheduler> scheduler_;
 
     State state_ = State::Pending;

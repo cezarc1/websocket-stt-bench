@@ -149,6 +149,10 @@ public:
         ws_->end(code, reason);
     }
 
+    // Called from `behavior.close` before uWS frees the socket, so a later
+    // deferred `send`/`close_with` no-ops instead of touching a dead `ws_`.
+    void mark_closed() noexcept override { closed_ = true; }
+
 private:
     uWS::WebSocket<false, true, PerSocketData>* ws_;
     bool closed_ = false;
@@ -199,7 +203,7 @@ void register_routes(uWS::App& app, LoopState& loop_state) {
         auto sink = std::make_shared<WsSink>(ws);
         data->sink = sink;
         data->session = std::make_shared<Session>(loop_state.config, loop_state.inference,
-                                                  *sink, loop_state.scheduler);
+                                                  sink, loop_state.scheduler);
 
         const auto first_fire = compute_first_fire(loop_state.config);
         data->session->set_expected_next_flush(first_fire);
@@ -218,14 +222,31 @@ void register_routes(uWS::App& app, LoopState& loop_state) {
         }
     };
 
-    behavior.close = [](auto* ws, int /*code*/, std::string_view /*reason*/) {
+    behavior.close = [&loop_state](auto* ws, int /*code*/, std::string_view /*reason*/) {
         auto* data = static_cast<PerSocketData*>(ws->getUserData());
-        // Drop both shared_ptrs in declaration order (session first, sink last).
-        // The wheel's weak_ptr expires here and the next tick drops the entry.
-        // Any pending inference callback's weak_ptr<Session> also expires; it
-        // resumes on the loop and no-ops via `weak.lock()` returning null.
-        data->session.reset();
-        data->sink.reset();
+        // Neutralize the sink NOW, before uWS frees the socket: any
+        // in-flight deferred inference completion then no-ops instead of
+        // dereferencing the dangling `uWS::WebSocket*` (uWS auto-closes on
+        // backpressure / transport error without going through
+        // `close_with`, so the raw `ws_` would otherwise stay "open").
+        if (data->sink) {
+            data->sink->mark_closed();
+        }
+        // Defer the actual destruction off the current call stack. uWS can
+        // invoke `close` re-entrantly from inside `ws->end()` — itself
+        // called from a Session method — so destroying the Session here is
+        // a use-after-free of `this`. Move the owners into a deferred task
+        // so the stack unwinds first; uWS frees PerSocketData after this
+        // returns, so ownership must leave `data` now. The wheel's /
+        // inference callback's `weak_ptr<Session>` expire when the task
+        // runs and no-op via `weak.lock()`.
+        loop_state.scheduler->post(
+            [s = std::move(data->session), k = std::move(data->sink)]() mutable {
+                // Captured solely to destroy `s`/`k` here, after the stack
+                // unwinds. (void) silences -Wunused-lambda-capture.
+                (void)s;
+                (void)k;
+            });
     };
 
     app.ws<PerSocketData>("/ws/stt", std::move(behavior));

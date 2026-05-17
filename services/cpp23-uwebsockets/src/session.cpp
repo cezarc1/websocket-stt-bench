@@ -19,9 +19,12 @@ double elapsed_ms(std::chrono::steady_clock::time_point now,
 
 }  // namespace
 
-Session::Session(const Config& config, InferenceClient& inference, OutboundSink& sink,
-                 std::shared_ptr<Scheduler> scheduler)
-    : config_(config), inference_(inference), sink_(sink), scheduler_(std::move(scheduler)) {
+Session::Session(const Config& config, InferenceClient& inference,
+                 std::shared_ptr<OutboundSink> sink, std::shared_ptr<Scheduler> scheduler)
+    : config_(config),
+      inference_(inference),
+      sink_(std::move(sink)),
+      scheduler_(std::move(scheduler)) {
     // Pre-size to the typical batch (50 frames at 20 ms cadence + headroom).
     // Without this, the first 50 push_backs each trigger a vector realloc.
     buffer_.reserve(64);
@@ -29,7 +32,7 @@ Session::Session(const Config& config, InferenceClient& inference, OutboundSink&
 
 void Session::fail_protocol(int code, std::string_view reason) {
     state_ = State::Closed;
-    sink_.close_with(code, reason);
+    sink_->close_with(code, reason);
 }
 
 void Session::on_text(std::string_view text) {
@@ -151,7 +154,7 @@ void Session::on_inference_succeeded(InferResponse infer, const BatchContext& ct
     if (auto err = glz::write<WIRE_JSON>(partial, json_scratch_); err) {
         return;
     }
-    sink_.send(json_scratch_);
+    sink_->send(json_scratch_);
 }
 
 void Session::on_inference_failed(InferenceFailure err, const BatchContext& ctx) {
@@ -182,7 +185,7 @@ void Session::on_inference_failed(InferenceFailure err, const BatchContext& ctx)
     if (auto write_err = glz::write<WIRE_JSON>(msg, json_scratch_); write_err) {
         return;
     }
-    sink_.send(json_scratch_);
+    sink_->send(json_scratch_);
 }
 
 }  // namespace stt
