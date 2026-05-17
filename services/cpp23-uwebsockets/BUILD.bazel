@@ -1,4 +1,3 @@
-load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile_commands")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 
 # Strict warnings for our own targets. -Wconversion / -Wold-style-cast /
@@ -104,21 +103,10 @@ cc_test(
         "@doctest//doctest:main",
     ],
 )
-
-# `bazel run //:refresh_compile_commands` writes `compile_commands.json` at the
-# workspace root with every flag (including `-std=c++23` and the hermetic
-# libc++ include path under `external/toolchains_llvm++llvm+llvm_toolchain_llvm`)
-# that Bazel uses to build these targets. clangd / Cursor / VSCode pick it up
-# automatically and stop flagging C++23 stdlib headers like `<expected>`.
-# Re-run whenever you add a new source file or change copts.
-refresh_compile_commands(
-    name = "refresh_compile_commands",
-    targets = {
-        "//:stt_core": "",
-        "//:stt-cpp23-uwebsockets": "",
-        "//:protocol_test": "",
-        "//:config_test": "",
-        "//:inference_test": "",
-        "//:session_test": "",
-    },
-)
+# NOTE: the dev-only `//:refresh_compile_commands` target (hedron
+# bazel-compile-commands-extractor) was removed — its `.bzl` uses the
+# native `py_binary` rule that Bazel 9.1.0 dropped, which broke
+# `bazel fetch //...` and the production image build. It only generated
+# IDE `compile_commands.json`; nothing in the gateway build needs it.
+# Regenerate compile_commands via a newer rules_python-aware extractor
+# locally if IDE support is wanted.
