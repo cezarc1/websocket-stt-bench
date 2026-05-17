@@ -21,19 +21,19 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 
 ## TL;DR
 
-![Concurrent sessions vs. Lines Of Code at 1 vCPU](docs/loc-vs-capacity.png)
+![Concurrent sessions vs. LOC at 1 vCPU](docs/loc-vs-capacity.png)
 
 *Concurrent WebSocket sessions sustained inside the [SLO](#the-slo-what-passing-means):*
 
-| Runtime | 1 vCPU | 2 vCPU | Bottleneck | LOC | Details |
+| Runtime | 1 vCPU | 2 vCPU | Bottleneck | App LOC | Details |
 |---|---:|---:|---|---:|---|
 | **[C++23](https://en.cppreference.com/w/cpp/23) + [uWebSockets 20.77](https://github.com/uNetworking/uWebSockets)** | **4450** | **TBD** | CPU/latency | 1.6k | [runs](services/cpp23-uwebsockets/BENCHMARK.md) |
 | **[Rust 1.95](https://github.com/rust-lang/rust) + async [Axum](https://github.com/tokio-rs/axum) / [Tokio](https://github.com/tokio-rs/tokio)** | **3475** | **4250** (1.22X) | CPU | 696 | [runs](services/rust-axum/BENCHMARK.md) |
 | **[Java 25 LTS](https://openjdk.org/projects/jdk/25/) + [Helidon Níma 4.3](https://helidon.io/)** | 2625‡ | 3750 (1.43X) | latency, then heap/OOM cliff | 917 | [runs](services/java-helidon-nima/BENCHMARK.md) |
 | **[TypeScript](https://www.typescriptlang.org/) on [Bun 1.3.13](https://bun.sh/)** | 2550‡ | n/a | memory/error cliff; fetch caveat | 734 | [runs](services/typescript-bun/BENCHMARK.md) |
 | **[Go 1.26.3](https://go.dev/) + `net/http` / [`coder/websocket`](https://github.com/coder/websocket)** | 2500‡ | 4000 (1.60X) | CPU/latency | 893 | [runs](services/go-nethttp/BENCHMARK.md) |
-| **[OxCaml 5.2.0+ox](https://oxcaml.org/) + Async** | 2075 | 3350§ (replicas) | CPU, single Async domain | 1235 | [runs](services/ocaml-oxcaml/BENCHMARK.md) |
-| **OCaml 5.4.1 + Async** | 1930 | TBD | CPU, single Async domain | 1236 | [runs](services/ocaml-websocket-async/BENCHMARK.md) |
+| **[OxCaml 5.2.0+ox](https://oxcaml.org/) + Async** | 2075 | 3350§ (replicas) | CPU, single Async domain | 879 | [runs](services/ocaml-oxcaml/BENCHMARK.md) |
+| **OCaml 5.4.1 + Async** | 1930 | TBD | CPU, single Async domain | 850 | [runs](services/ocaml-websocket-async/BENCHMARK.md) |
 | **[Scala 3.3 LTS](https://www.scala-lang.org/) + [Apache Pekko 1.6](https://pekko.apache.org/)** | 1400 | 2200 (1.57X) | connect timeouts | 726 | [runs](services/scala-pekko/BENCHMARK.md) |
 | **[Elixir 1.19.5](https://github.com/elixir-lang/elixir) + [Phoenix](https://github.com/phoenixframework/phoenix) / [Bandit](https://github.com/mtrudel/bandit)** | 1250 | 2250 (1.80X) | CPU/memory | 784 | [runs](services/elixir-phoenix/BENCHMARK.md) |
 | **[CPython 3.14.4](https://github.com/python/cpython) + uvloop + FastAPI / Granian** | 1100 | 1750 (1.59X)† | CPU | 678 | [runs](services/python-fastapi/BENCHMARK.md) |
@@ -42,6 +42,7 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 † Python scales out at 2 vCPU by adding worker processes; each Granian worker owns one asyncio loop.
 ‡ 1 vCPU / 2 GiB memory. The 1 GiB shape also OOMs near the edge, so the bumped 2 GiB shape is reported.
 § OxCaml runs one Async domain; a 2-vCPU pod does not use the second core meaningfully. Replica fan-out reached 3350 / 1.61X.
+LOC note: the TL;DR and chart use application LOC. For both OCaml raw-transport variants, that excludes the generic first-party WebSocket/HTTP/SHA-1/base64 transport shim that package-backed runtimes get from dependencies. Comments and blank lines are not counted.
 
 The above numbers are the highest confirmed session counts that passed the SLO at the given vCPU shape. Detailed brackets, tables, and run notes live in the linked service benchmark docs.
 
@@ -113,17 +114,19 @@ flowchart LR
 
 ## Code Shape
 
-| Runtime | Raw production LOC | Files | Implementation shape |
-|---|---:|---:|---|
-| Python | 678 | 9 | Pydantic boundaries, uvloop/FastAPI, dual GIL/free-threaded runtime path |
-| Async Rust/Axum | 696 | 6 | Tokio tasks, `Arc<Semaphore>::new(1)`, zero-copy `BytesMut` batching |
-| TypeScript/Bun | 734 | 6 | `Bun.serve`, Valibot boundaries, bounded outbox |
-| Elixir | 784 | 13 | Phoenix/Bandit raw `WebSock`, process-per-connection |
-| Go | 893 | 6 | `net/http`, `coder/websocket`, h2c inference client |
-| Java | 917 | 16 | Helidon Níma virtual threads, sealed outbound messages |
-| Stock OCaml/Async | 1236 | 25 | raw `Async.Tcp`, hand-rolled RFC 6455, structural one-inflight flush loop |
-| OxCaml | 1235 | 21 | raw `Async.Tcp`, hand-rolled RFC 6455, opaque inflight capability |
-| C++23 | 1551 | 11 | uWebSockets loop-per-thread, libcurl HTTP/2, Glaze JSON |
+| Runtime | App LOC | Raw production LOC | Files | Implementation shape |
+|---|---:|---:|---:|---|
+| Python | 678 | 678 | 9 | Pydantic boundaries, uvloop/FastAPI, dual GIL/free-threaded runtime path |
+| Async Rust/Axum | 696 | 696 | 6 | Tokio tasks, `Arc<Semaphore>::new(1)`, zero-copy `BytesMut` batching |
+| TypeScript/Bun | 734 | 734 | 6 | `Bun.serve`, Valibot boundaries, bounded outbox |
+| Elixir | 784 | 784 | 13 | Phoenix/Bandit raw `WebSock`, process-per-connection |
+| Go | 893 | 893 | 6 | `net/http`, `coder/websocket`, h2c inference client |
+| Java | 917 | 917 | 16 | Helidon Níma virtual threads, sealed outbound messages |
+| Stock OCaml/Async | 850 | 1220 | 25 | raw `Async.Tcp`, hand-rolled RFC 6455, structural one-inflight flush loop |
+| OxCaml | 879 | 1244 | 21 | raw `Async.Tcp`, hand-rolled RFC 6455, opaque inflight capability |
+| C++23 | 1551 | 1551 | 11 | uWebSockets loop-per-thread, libcurl HTTP/2, Glaze JSON |
+
+Application LOC is the chart count: code-only production lines after excluding blank/comment lines. For the two OCaml raw-transport variants, it also excludes the generic first-party transport/crypto shim (`Base64`, `Sha1`, `Http1`, `Websocket_frame`, `Websocket_handshake`) that package-backed runtimes get from dependencies. Raw production LOC keeps every shipped first-party production line, including that shim.
 
 The load-bearing invariant is one in-flight inference request per connection. Every implementation enforces it, but the expression differs: semaphore, atomic flag, token channel, process state, task guard, sequential flush loop, or `Mvar`-backed capability.
 

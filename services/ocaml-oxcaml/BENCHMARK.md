@@ -12,9 +12,11 @@ OxCaml reached the Go/Bun tier only after raw transport work: fresh inference co
 
 ## Implementation Shape
 
-Raw production size: 1235 LOC across 21 files.
+Application size: 879 LOC. Raw production size: 1244 LOC across 21 files.
 
 The gateway uses raw `Async.Tcp`, hand-rolled RFC 6455 framing plus SHA-1/base64, and HTTP/1.1 keep-alive to inference. The inflight invariant is represented as an opaque mint-once `Inflight_capability.t`, backed at runtime by an `Async.Mvar`.
+
+The README chart uses application LOC for cross-runtime fairness. For OxCaml, that excludes 365 code-only lines of generic first-party transport/crypto shim (`Base64`, `Sha1`, `Http1`, `Websocket_frame`, `Websocket_handshake`) that package-backed runtimes get from dependencies. The raw production count still includes that shipped code. Comments and blank lines are not counted.
 
 An attempted `@ unique` compile-time proof did not survive `Async`'s un-mode-annotated `Mvar`/`Deferred` boundary, so the shipped invariant is a type-shaped runtime guard, not a compiler proof. `janestreet/parallel` does not lift gateway capacity because its `parallel` requires an `@ once portable` closure and Async sockets are domain-pinned.
 

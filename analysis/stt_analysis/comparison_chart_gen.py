@@ -23,15 +23,18 @@ matplotlib.use("Agg")
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 
-# (name, sessions at 1 vCPU, LOC, label dx_pts, dy_pts, horizontal alignment)
+# (name, sessions at 1 vCPU, application LOC, label dx_pts, dy_pts, horizontal alignment)
+# For most runtimes, application LOC equals raw production LOC. The two OCaml
+# raw-transport variants exclude the generic first-party
+# WebSocket/HTTP/SHA-1/base64 shim so package code is treated consistently.
 RUNTIMES: list[tuple[str, int, int, int, int, str]] = [
     ("C++23 / uWebSockets", 4450, 1551, -10, -14, "right"),
     ("Async Rust / Axum", 3475, 696, -10, 10, "right"),
     ("Java / Helidon Nima", 2625, 917, 10, 10, "left"),
     ("TypeScript / Bun", 2550, 734, 10, -14, "left"),
     ("Go / net/http", 2500, 893, 10, -14, "left"),
-    ("OCaml / OxCaml", 2075, 1235, 10, 10, "left"),
-    ("OCaml / Async raw", 1930, 1236, 10, -14, "left"),
+    ("OxCaml", 2075, 879, 10, 10, "left"),
+    ("OCaml", 1930, 850, 10, -14, "left"),
     ("Scala / Pekko", 1400, 726, 10, -14, "left"),
     ("Elixir / Phoenix", 1250, 784, 10, 10, "left"),
     ("Python (uvloop + FastAPI)", 1100, 678, -10, 10, "right"),
@@ -76,9 +79,9 @@ def render(out_path: Path) -> None:
         )
 
     ax.set_xlabel("Concurrent sessions sustained at 1 vCPU", fontsize=11)
-    ax.set_ylabel("Lines Of Code", fontsize=11)
+    ax.set_ylabel("LOC", fontsize=11)
     ax.set_title(
-        "Concurrent sessions vs. Lines Of Code — websocket-stt-bench",
+        "Concurrent sessions vs. LOC — websocket-stt-bench",
         fontsize=13,
         pad=14,
     )
