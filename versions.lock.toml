@@ -142,7 +142,7 @@ clap = "4.6.1"
 tokio_tungstenite = "0.29.0"
 tungstenite = "0.29.0"
 socket2 = "0.6.3"
-ureq = "3.3.0"
+mio = "1.2.0"
 hdrhistogram = "7.5.4"
 anyhow = "1.0.102"
 

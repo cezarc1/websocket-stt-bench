@@ -25,7 +25,7 @@ tokio-tungstenite = "=0.29.0"
 tungstenite = "=0.29.0"
 tracing = "=0.1.44"
 socket2 = "=0.6.3"
-ureq = { version = "=3.3.0", default-features = false }
+mio = { version = "=1.2.0", features = ["net", "os-poll"] }
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "fmt"] }
 
 # Benchmark binaries: cross-crate inlining + single codegen unit so hot loops

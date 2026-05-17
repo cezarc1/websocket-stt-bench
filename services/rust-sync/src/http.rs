@@ -1,28 +1,54 @@
-//! Minimal HTTP/1.1 request read + routing for the connection's first
-//! bytes. We parse the request line and headers ourselves (the WS client
-//! waits for the 101 before sending frames, so there is nothing pipelined
-//! to over-read) and hand the post-handshake socket to tungstenite.
+//! Non-blocking HTTP/1.1 upgrade handshake for an incoming connection.
+//!
+//! Bytes may arrive across several epoll readable events, so the request
+//! head accumulates in a per-connection buffer until the blank-line
+//! terminator. A WebSocket client must wait for the 101 before sending
+//! frames, so reading the head in bulk can't swallow frame bytes.
 
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
 
+use mio::net::TcpStream;
 use tungstenite::handshake::derive_accept_key;
 
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 
 pub enum Route {
-    /// Valid `GET /ws/stt` upgrade; the 101 response has been written and
+    /// Head complete, valid `GET /ws/stt` upgrade; the 101 was written and
     /// the socket is ready for `WebSocket::from_raw_socket`.
     WebSocket,
-    /// Anything else: a response has been written and the caller should
-    /// drop the connection.
+    /// Head complete but not an upgrade (`/health` 200, 404, …); a
+    /// response was written and the caller should drop the connection.
     Handled,
+    /// Head not yet fully received; call again on the next readable event.
+    NeedMore,
 }
 
-/// Read the request head, route it, and (for `/ws/stt`) complete the
-/// WebSocket upgrade by writing the 101 response.
-pub fn handshake(stream: &mut TcpStream) -> io::Result<Route> {
-    let head = read_head(stream)?;
+/// Drain the socket into `buf`, and once the head is complete route it.
+pub fn feed(stream: &mut TcpStream, buf: &mut Vec<u8>) -> io::Result<Route> {
+    let mut chunk = [0u8; 1024];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => return Err(io::Error::from(io::ErrorKind::UnexpectedEof)),
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.len() > MAX_HEADER_BYTES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "request head too large",
+                    ));
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+
+    let Some(end) = find_double_crlf(buf) else {
+        return Ok(Route::NeedMore);
+    };
+    let head = std::str::from_utf8(&buf[..end])
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
     let mut lines = head.split("\r\n");
     let request_line = lines.next().unwrap_or("");
     let mut parts = request_line.split(' ');
@@ -33,16 +59,15 @@ pub fn handshake(stream: &mut TcpStream) -> io::Result<Route> {
         write_simple(stream, 405, "Method Not Allowed")?;
         return Ok(Route::Handled);
     }
-
     match path {
         "/health" => {
             let body = br#"{"ok":true,"runtime":"rust-sync"}"#;
-            write!(
-                stream,
+            let resp = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
-            )?;
-            stream.write_all(body)?;
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.write_all(body);
             Ok(Route::Handled)
         }
         "/ws/stt" => {
@@ -51,11 +76,10 @@ pub fn handshake(stream: &mut TcpStream) -> io::Result<Route> {
                 return Ok(Route::Handled);
             };
             let accept = derive_accept_key(key.as_bytes());
-            write!(
-                stream,
+            let resp = format!(
                 "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
-            )?;
-            stream.flush()?;
+            );
+            stream.write_all(resp.as_bytes())?;
             Ok(Route::WebSocket)
         }
         _ => {
@@ -66,46 +90,18 @@ pub fn handshake(stream: &mut TcpStream) -> io::Result<Route> {
 }
 
 fn write_simple(stream: &mut TcpStream, code: u16, reason: &str) -> io::Result<()> {
-    write!(
-        stream,
-        "HTTP/1.1 {code} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    )
+    let _ = stream.write_all(
+        format!("HTTP/1.1 {code} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .as_bytes(),
+    );
+    Ok(())
 }
 
-/// Case-insensitive header lookup over the already-split header lines.
 fn header<'a>(lines: &'a std::str::Split<'a, &str>, name: &str) -> Option<&'a str> {
     lines.clone().find_map(|line| {
         let (k, v) = line.split_once(':')?;
         k.trim().eq_ignore_ascii_case(name).then(|| v.trim())
     })
-}
-
-/// Read up to the blank-line terminator. A WebSocket client must wait for
-/// the 101 before sending anything, so reading in chunks can't swallow
-/// frame bytes — and the byte-at-a-time alternative is ~hundreds of
-/// syscalls per connection, which collapses the accept path when the
-/// loadgen opens every session inside a ~1 s burst.
-fn read_head(stream: &mut TcpStream) -> io::Result<String> {
-    let mut buf = Vec::with_capacity(1024);
-    let mut chunk = [0u8; 1024];
-    loop {
-        let n = stream.read(&mut chunk)?;
-        if n == 0 {
-            return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
-        }
-        buf.extend_from_slice(&chunk[..n]);
-        if let Some(end) = find_double_crlf(&buf) {
-            buf.truncate(end);
-            break;
-        }
-        if buf.len() > MAX_HEADER_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "request head too large",
-            ));
-        }
-    }
-    String::from_utf8(buf).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))
 }
 
 fn find_double_crlf(buf: &[u8]) -> Option<usize> {
