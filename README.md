@@ -54,8 +54,8 @@ The above numbers are the highest confirmed session counts that passed the SLO a
 
 ## Takeaways
 
-- The biggest surprise: the per-vCPU leader is **Rust with no async runtime at all** — a two-thread `mio`/epoll build (one WebSocket loop, one inference loop, plain HTTP/1.1, zero extra deps) at 4400 sessions/vCPU, just past C++ (4350). I'd assumed the last gap to async Rust was HTTP/1.1-vs-HTTP/2; it wasn't — it was cooperative single-loop contention, and one OS thread of separation took it 3150 → 4400. The architecture, never the language or the transport, was the gap.
-- Async Rust is still the best *balance*: 696 LOC and 3475 sessions/vCPU, the leanest of the high-capacity tier even though raw-capacity now goes to the no-runtime Rust build. Both Claude Opus (max) and GPT 4.5 (xhigh) had no issue writing Rust.
+- The biggest surprise: the per-vCPU leader is **Rust **, specifically a two-thread `mio`/epoll build (one WebSocket loop, one inference loop, plain HTTP/1.1, zero extra deps) at 4400 sessions/vCPU, just past C++ (4350).
+- Async Rust is still the best *balance*: @ 696 LOC and 3475 sessions/vCPU, the leanest of the high-capacity tier even though raw-capacity now goes to the no-runtime Rust build. Both Claude Opus (max) and GPT 4.5 (xhigh) had no issue writing Rust.
 - Tail-latency SLOs expose GC jitter. Passing requires p95 frame latency, not just average throughput, so allocation pressure, safepoints, and collection pauses can turn otherwise healthy throughput into latency cliffs. The size of that penalty is stack- and tuning-dependent, not a blanket verdict on every GC runtime.
 - Two managed-runtime clusters show up. Java, Bun, and Go form the fast GC/managed tier around 2500-2625 sessions/vCPU, with Java narrowly ahead. Actor-style runtimes cluster lower at 1 vCPU: Elixir/BEAM at 1250 and Scala/Pekko at 1400, though both land near 2200-2250 at 2 vCPU; Scala still has a connect-timeout caveat.
 - BEAM scales vertically really well but dissapoints overall: Elixir trails at 1 vCPU but has the cleanest 1→2 vCPU lift. Similar story with Scala + actor framework. Perhaps this is a actor concurency model issue overall? TODO: investigate this.
@@ -149,6 +149,8 @@ The load-bearing invariant is one in-flight inference request per connection. Ev
 | Modeling invariants as types | OxCaml | opaque inflight capability, still runtime-enforced |
 | Upstream OCaml without OxCaml | Stock OCaml/Async raw transport | within about 7% of OxCaml once transport is held roughly constant |
 | Free-threaded Python | wait | this stack is reliability-limited |
+
+My hot-take? If you're at a startup, start with async Python, iterate and once you need to do some cost savings, either commit to a full, coding agent driven, Rust rewrite, or swap out the bottlenck components via Rust-based cPython extension modules (serialization, websockets, etc). Else, just start in Rust. Yes, the hype is real!
 
 ## Reproducing
 
