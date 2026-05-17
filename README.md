@@ -21,11 +21,11 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 
 ## TL;DR
 
-![Concurrent sessions vs. Lines Of Code at 1 vCPU](docs/loc-vs-capacity.png)
+![Concurrent sessions vs. LOC at 1 vCPU](docs/loc-vs-capacity.png)
 
 *Concurrent WebSocket sessions sustained inside the [SLO](#the-slo-what-passing-means):*
 
-| Runtime | 1 vCPU | 2 vCPU | Bottleneck | LOC | Details |
+| Runtime | 1 vCPU | 2 vCPU | Bottleneck | App LOC | Details |
 |---|---:|---:|---|---:|---|
 | **[Rust 1.95](https://github.com/rust-lang/rust) — two `mio`/epoll threads, **no async runtime**** | **4400**¶ | **5500** (1.25X) | newest-p50 latency | 1221 | [runs](services/rust-sync/BENCHMARK.md) |
 | **[C++23](https://en.cppreference.com/w/cpp/23) + [uWebSockets 20.77](https://github.com/uNetworking/uWebSockets)** | **4350**◆ | **TBD** | newest-p50 latency | 1.6k | [runs](services/cpp23-uwebsockets/BENCHMARK.md) |
@@ -33,8 +33,8 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 | **[Java 25 LTS](https://openjdk.org/projects/jdk/25/) + [Helidon Níma 4.3](https://helidon.io/)** | 2625‡ | 3750 (1.43X) | latency, then heap/OOM cliff | 917 | [runs](services/java-helidon-nima/BENCHMARK.md) |
 | **[TypeScript](https://www.typescriptlang.org/) on [Bun 1.3.13](https://bun.sh/)** | 2550‡ | n/a | memory/error cliff; fetch caveat | 734 | [runs](services/typescript-bun/BENCHMARK.md) |
 | **[Go 1.26.3](https://go.dev/) + `net/http` / [`coder/websocket`](https://github.com/coder/websocket)** | 2500‡ | 4000 (1.60X) | CPU/latency | 893 | [runs](services/go-nethttp/BENCHMARK.md) |
-| **[OxCaml 5.2.0+ox](https://oxcaml.org/) + Async** | 2075 | 3350§ (replicas) | CPU, single Async domain | 1235 | [runs](services/ocaml-oxcaml/BENCHMARK.md) |
-| **OCaml 5.4.1 + Async** | 1930 | TBD | CPU, single Async domain | 1236 | [runs](services/ocaml-websocket-async/BENCHMARK.md) |
+| **[OxCaml 5.2.0+ox](https://oxcaml.org/) + Async** | 2075 | 3350§ (replicas) | CPU, single Async domain | 879 | [runs](services/ocaml-oxcaml/BENCHMARK.md) |
+| **OCaml 5.4.1 + Async** | 1930 | TBD | CPU, single Async domain | 850 | [runs](services/ocaml-websocket-async/BENCHMARK.md) |
 | **[Scala 3.3 LTS](https://www.scala-lang.org/) + [Apache Pekko 1.6](https://pekko.apache.org/)** | 1400 | 2200 (1.57X) | connect timeouts | 726 | [runs](services/scala-pekko/BENCHMARK.md) |
 | **[Elixir 1.19.5](https://github.com/elixir-lang/elixir) + [Phoenix](https://github.com/phoenixframework/phoenix) / [Bandit](https://github.com/mtrudel/bandit)** | 1250 | 2250 (1.80X) | CPU/memory | 784 | [runs](services/elixir-phoenix/BENCHMARK.md) |
 | **[CPython 3.14.4](https://github.com/python/cpython) + uvloop + FastAPI / Granian** | 1100 | 1750 (1.59X)† | CPU | 678 | [runs](services/python-fastapi/BENCHMARK.md) |
@@ -45,6 +45,8 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 § OxCaml runs one Async domain; a 2-vCPU pod does not use the second core meaningfully. Replica fan-out reached 3350 / 1.61X.
 ¶ **No async runtime, zero new dependencies, plain HTTP/1.1 — and it beats validated C++.** Two OS threads, each its own `mio`/epoll loop: a WebSocket loop + a dedicated inference loop, joined by `std::sync::mpsc` + a `mio::Waker` (the structural mirror of C++'s uWebSockets-loop + libcurl-`jthread`). 1 vCPU: **4400 confirmed (2/2) ↔ 4500 borderline ↔ 4600 first solid fail (2/2)**, clean newest-p50 edge, zero errors/restarts across 50→7000. 2 vCPU: **5500 confirmed ↔ 5600 first fail**, a real ~1.25× in-pod lift (the prior single-loop revision was replica-only — one loop is one core). The journey is the finding: thread-per-connection collapsed at ~825 (OS-thread CFS-throttle freeze); a single evented loop reached 3150; the assumed-final 3150→3475 gap to async Rust was blamed on HTTP/1.1-vs-HTTP/2 — wrong: it was **cooperative single-loop contention** (inference work interleaved with WebSocket flushes on one thread). One OS thread of separation — same transport, same pool, same `serde_json` — flipped a –9%-of-async-Rust deficit into a result above validated C++ (4350). The architecture, never the language or the transport, was the entire gap.
 ◆ Re-validated 2026-05-17 on the crash-fixed image: **4350 confirmed (2/2) ↔ 4400 first solid fail (2/2)**, a clean newest-p50 latency edge with zero errors and zero crashes through the whole 50→4450 sweep. The earlier 4450 was measured on a binary that SIGSEGVs under load (a `WsSink` use-after-free + a Bazel-9 build break — both fixed here); the fix trades ~2% steady-state capacity (`shared_ptr` + virtual dispatch on the hot send path) for correctness, so 4350 is the honest reproducible ceiling. See [runs](services/cpp23-uwebsockets/BENCHMARK.md).
+
+LOC note: the TL;DR and chart use application LOC. For both OCaml raw-transport variants, that excludes the generic first-party WebSocket/HTTP/SHA-1/base64 transport shim that package-backed runtimes get from dependencies. Comments and blank lines are not counted.
 
 The above numbers are the highest confirmed session counts that passed the SLO at the given vCPU shape. Detailed brackets, tables, and run notes live in the linked service benchmark docs.
 
@@ -116,18 +118,20 @@ flowchart LR
 
 ## Code Shape
 
-| Runtime | Raw production LOC | Files | Implementation shape |
-|---|---:|---:|---|
-| Python | 678 | 9 | Pydantic boundaries, uvloop/FastAPI, dual GIL/free-threaded runtime path |
-| Async Rust/Axum | 696 | 6 | Tokio tasks, `Arc<Semaphore>::new(1)`, zero-copy `BytesMut` batching |
-| TypeScript/Bun | 734 | 6 | `Bun.serve`, Valibot boundaries, bounded outbox |
-| Elixir | 784 | 13 | Phoenix/Bandit raw `WebSock`, process-per-connection |
-| Go | 893 | 6 | `net/http`, `coder/websocket`, h2c inference client |
-| Java | 917 | 16 | Helidon Níma virtual threads, sealed outbound messages |
-| Rust/sync (`mio`) | 1221 | 6 | two `mio` epoll loops on two OS threads (no async runtime), `mpsc`+`Waker` handoff, bounded shared inference pool |
-| OxCaml | 1235 | 21 | raw `Async.Tcp`, hand-rolled RFC 6455, opaque inflight capability |
-| Stock OCaml/Async | 1236 | 25 | raw `Async.Tcp`, hand-rolled RFC 6455, structural one-inflight flush loop |
-| C++23 | 1551 | 11 | uWebSockets loop-per-thread, libcurl HTTP/2, Glaze JSON |
+| Runtime | App LOC | Raw production LOC | Files | Implementation shape |
+|---|---:|---:|---:|---|
+| Python | 678 | 678 | 9 | Pydantic boundaries, uvloop/FastAPI, dual GIL/free-threaded runtime path |
+| Async Rust/Axum | 696 | 696 | 6 | Tokio tasks, `Arc<Semaphore>::new(1)`, zero-copy `BytesMut` batching |
+| TypeScript/Bun | 734 | 734 | 6 | `Bun.serve`, Valibot boundaries, bounded outbox |
+| Elixir | 784 | 784 | 13 | Phoenix/Bandit raw `WebSock`, process-per-connection |
+| Go | 893 | 893 | 6 | `net/http`, `coder/websocket`, h2c inference client |
+| Java | 917 | 917 | 16 | Helidon Níma virtual threads, sealed outbound messages |
+| Stock OCaml/Async | 850 | 1220 | 25 | raw `Async.Tcp`, hand-rolled RFC 6455, structural one-inflight flush loop |
+| Rust/sync (`mio`) | 1221 | 1221 | 6 | two `mio` epoll loops on two OS threads (no async runtime), `mpsc`+`Waker` handoff, bounded shared inference pool |
+| OxCaml | 879 | 1244 | 21 | raw `Async.Tcp`, hand-rolled RFC 6455, opaque inflight capability |
+| C++23 | 1551 | 1551 | 11 | uWebSockets loop-per-thread, libcurl HTTP/2, Glaze JSON |
+
+Application LOC is the chart count: code-only production lines after excluding blank/comment lines. For the two OCaml raw-transport variants, it also excludes the generic first-party transport/crypto shim (`Base64`, `Sha1`, `Http1`, `Websocket_frame`, `Websocket_handshake`) that package-backed runtimes get from dependencies. Raw production LOC keeps every shipped first-party production line, including that shim. The no-runtime Rust gateway uses no such shim, so its two counts are equal.
 
 The load-bearing invariant is one in-flight inference request per connection. Every implementation enforces it, but the expression differs: semaphore, atomic flag, token channel, process state, task guard, sequential flush loop, `Mvar`-backed capability, or — in the no-runtime Rust gateway — the single shared-pool inference slot a connection holds while its request is in flight.
 
