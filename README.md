@@ -14,9 +14,9 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 
 | Runtime | LOC | 1 vCPU | 2 vCPU | Bottleneck | Details |
 |---|---:|---:|---:|---|---|
+| **[Rust 1.95](https://github.com/rust-lang/rust) — two evented threads (`mio` epoll, **no async runtime**)** | 1221 | **4400**¶ | **5500** (1.25X) | newest-p50 latency | [runs](services/rust-sync/BENCHMARK.md) |
 | **[C++23](https://en.cppreference.com/w/cpp/23) + [uWebSockets 20.77](https://github.com/uNetworking/uWebSockets)** | 1.6k | **4350**◆ | **TBD** | newest-p50 latency | [runs](services/cpp23-uwebsockets/BENCHMARK.md) |
 | **[Rust 1.95](https://github.com/rust-lang/rust) + [Axum](https://github.com/tokio-rs/axum) / [Tokio](https://github.com/tokio-rs/tokio)** | 696 | **3475** | **4250** (1.22X) | CPU | [runs](services/rust-axum/BENCHMARK.md) |
-| **[Rust 1.95](https://github.com/rust-lang/rust) — evented (`mio` epoll, **no async runtime**)** | 1111 | **3150**¶ | replica-only | clean newest-p50 latency edge, zero errors | [runs](services/rust-sync/BENCHMARK.md) |
 | **[Java 25 LTS](https://openjdk.org/projects/jdk/25/) + [Helidon Níma 4.3](https://helidon.io/)** | 917 | 2600‡ | 3750 (1.44X) | latency, then heap/OOM cliff | [runs](services/java-helidon-nima/BENCHMARK.md) |
 | **[TypeScript](https://www.typescriptlang.org/) on [Bun 1.3.13](https://bun.sh/)** | 734 | 2550‡ | n/a | memory/error cliff; fetch caveat | [runs](services/typescript-bun/BENCHMARK.md) |
 | **[Go 1.26.3](https://go.dev/) + `net/http` / [`coder/websocket`](https://github.com/coder/websocket)** | 893 | 2500‡ | 4000 (1.60X) | CPU/latency | [runs](services/go-nethttp/BENCHMARK.md) |
@@ -29,7 +29,7 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 † Python scales out at 2 vCPU by adding worker processes; each Granian worker owns one asyncio loop.
 ‡ 1 vCPU / 2 GiB memory. The 1 GiB shape also OOMs near the edge, so the bumped 2 GiB shape is reported.
 § OxCaml runs one Async domain; a 2-vCPU pod does not use the second core meaningfully. Replica fan-out reached 3350 / 1.61X.
-¶ Synchronous Rust with **no async runtime** — a single hand-rolled `mio`/epoll event loop + a bounded shared inference connection pool. 3150 confirmed ↔ 3300 first solid fail, a clean newest-p50 latency edge with zero errors. Reaches the async-Rust tier (~91% of Tokio's 3475, ~3.8× a naive thread-per-connection baseline) but does not beat it: the residual is hand-rolled-`mio` + HTTP/1.1 vs Tokio's mature reactor + reqwest HTTP/2 multiplexing on the identical single-thread/1-vCPU constraint. A single loop is one core, so 2-vCPU scales by replica fan-out, not in-pod.
+¶ **No async runtime, zero new dependencies, plain HTTP/1.1 — and it beats validated C++.** Two OS threads, each its own `mio`/epoll loop: a WebSocket loop + a dedicated inference loop, joined by `std::sync::mpsc` + a `mio::Waker` (the structural mirror of C++'s uWebSockets-loop + libcurl-`jthread`). 1 vCPU: **4400 confirmed (2/2) ↔ 4500 borderline ↔ 4600 first solid fail (2/2)**, clean newest-p50 edge, zero errors/restarts across 50→7000. 2 vCPU: **5500 confirmed ↔ 5600 first fail**, a real ~1.25× in-pod lift (the prior single-loop revision was replica-only — one loop is one core). The journey is the finding: thread-per-connection collapsed at ~825 (OS-thread CFS-throttle freeze); a single evented loop reached 3150; the assumed-final 3150→3475 gap to async Rust was blamed on HTTP/1.1-vs-HTTP/2 — wrong: it was **cooperative single-loop contention** (inference work interleaved with WebSocket flushes on one thread). One OS thread of separation — same transport, same pool, same `serde_json` — flipped a –9%-of-async-Rust deficit into a result above validated C++ (4350). The architecture, never the language or the transport, was the entire gap.
 ◆ Re-validated 2026-05-17 on the crash-fixed image: **4350 confirmed (2/2) ↔ 4400 first solid fail (2/2)**, a clean newest-p50 latency edge with zero errors and zero crashes through the whole 50→4450 sweep. The earlier 4450 was measured on a binary that SIGSEGVs under load (a `WsSink` use-after-free + a Bazel-9 build break — both fixed here); the fix trades ~2% steady-state capacity (`shared_ptr` + virtual dispatch on the hot send path) for correctness, so 4350 is the honest reproducible ceiling. See [runs](services/cpp23-uwebsockets/BENCHMARK.md).
 
 The above numbers are the highest confirmed session counts that passed the SLO at the given vCPU shape. Detailed brackets, tables, and run notes live in the linked service benchmark docs.
@@ -38,15 +38,15 @@ The above numbers are the highest confirmed session counts that passed the SLO a
 
 ## Takeaways
 
-- **C++ leads per vCPU; Rust, Java, Bun, and Go are still the broad high-throughput tier.**
-- **Async Rust is the best balance here:** 696 LOC and 3475 sessions/vCPU.
-- **A no-async-runtime Rust gateway reaches the async-Rust tier — the architecture, not Tokio, was the lever.** A hand-rolled `mio`/epoll loop with a bounded inference pool sustains 3150 sessions/vCPU (~91% of Tokio's 3475, ~3.8× a thread-per-connection baseline). The journey was the finding: thread-per-connection collapsed at ~825 (hundreds of OS threads CFS-throttle-freezing one core); going evented removed the freeze; one inference socket per session was then the wall (fd fan-out in the single loop, not CPU or the idle inference server); a bounded shared pool fixed it. The last ~9% to async Rust is hand-rolled `mio` + HTTP/1.1 vs Tokio's mature reactor + reqwest HTTP/2 multiplexing — not closable in canonical no-runtime Rust on one core.
+- **A no-async-runtime Rust gateway is the per-vCPU leader — the architecture, never the language or the transport, was the gap.** Two OS threads (a `mio`/epoll WebSocket loop + a dedicated inference loop, `mpsc`+`Waker` between them; no async runtime, zero new deps, plain HTTP/1.1) sustain **4400 confirmed sessions/vCPU**, *above* validated C++ (4350) and +27% over async Rust/Axum (3475). The journey is the finding, in three evidence-driven stages: thread-per-connection collapsed at ~825 (OS-thread CFS-throttle freeze); a single evented loop reached 3150; the residual 3150→3475 was assumed to be HTTP/1.1-vs-HTTP/2 but was actually **cooperative single-loop contention** — moving inference to its own OS thread (same transport, same pool, same `serde_json`) lifted the confirmed ceiling to 4400 and past C++. 2 vCPU: 5500 (1.25× in-pod; the single-loop revision was replica-only).
+- **C++ is no longer the capacity leader and is now Pareto-dominated:** uWebSockets + libcurl HTTP/2 holds 4350 (validated on the crash-fixed image), but two-thread sync Rust delivers more capacity at fewer LOC.
+- **Async Rust is still the best balance:** 696 LOC and 3475 sessions/vCPU — the leanest of the high-capacity tier even though it no longer leads on raw capacity.
 - **BEAM scales vertically better than it starts:** Elixir trails at 1 vCPU but has the cleanest 1→2 vCPU lift.
 - **Bun is surprisingly competitive for a native WebSocket server path, but Bun `fetch` is not an h2c-parity transport.**
 - **OxCaml got close to Java only after raw transport work:** persistent keep-alive + zero-copy framing moved the confirmed ceiling from 1050 to 2075.
 - **Free-threaded Python with this FastAPI/Granian stack is reliability-limited today; treat it as a stack result, not a verdict on no-GIL Python.**
 
-**Pareto frontier:** Python (678 LOC / 1100 sessions, leanest) · Rust/Axum (696 LOC / 3475, best balance) · C++23 (1551 LOC / 4350, most capacity). The evented no-runtime Rust gateway (1111 LOC / 3150) is dominated by Rust/Axum on both axes — strictly the "how close can you get without Tokio" experiment, ~9% short at higher LOC.
+**Pareto frontier:** Python (678 LOC / 1100 sessions, leanest) · Rust/Axum (696 LOC / 3475, best balance) · Rust/sync two-thread (1221 LOC / 4400, most capacity). C++23 (1551 LOC / 4350) is now **strictly dominated** by the two-thread no-runtime Rust gateway — fewer LOC *and* more sessions — so it drops off the frontier.
 
 ## The SLO: what "passing" means
 
@@ -107,7 +107,7 @@ flowchart LR
 | Elixir | 784 | 13 | Phoenix/Bandit raw `WebSock`, process-per-connection |
 | Go | 893 | 6 | `net/http`, `coder/websocket`, h2c inference client |
 | Java | 917 | 16 | Helidon Níma virtual threads, sealed outbound messages |
-| Rust/sync | 1111 | 6 | hand-rolled `mio` epoll loop (no async runtime), one deadline heap, bounded shared inference pool |
+| Rust/sync | 1221 | 6 | two `mio` epoll loops on two OS threads (no async runtime), `mpsc`+`Waker` handoff, bounded shared inference pool |
 | OxCaml | 1235 | 21 | raw `Async.Tcp`, hand-rolled RFC 6455, opaque inflight capability |
 | C++23 | 1551 | 11 | uWebSockets loop-per-thread, libcurl HTTP/2, Glaze JSON |
 
@@ -117,13 +117,14 @@ The load-bearing invariant is one in-flight inference request per connection. Ev
 
 | If you optimize for | Pick | Why |
 |---|---|---|
-| Lowest dollars per session | C++23/uWebSockets | 4350 sessions/vCPU |
-| Lowest dollars with memory safety | Rust/Axum | 3475 sessions/vCPU with compact code |
+| Lowest dollars per session | Rust/sync (two-thread) | 4400 sessions/vCPU, memory-safe, no async runtime — beats C++ |
+| Leanest of the high-capacity tier | Rust/Axum | 3475 sessions/vCPU in 696 LOC |
+| Maximum capacity in C++ | C++23/uWebSockets | 4350 sessions/vCPU (validated, crash-fixed) |
 | Rust-adjacent JVM capacity | Java/Helidon Níma | 2600 sessions/vCPU; watch heap at the cliff |
 | JS ecosystem with strong capacity | TypeScript on Bun | 2550 sessions/vCPU on native Bun primitives |
 | Go operational simplicity | Go/net-http | 2500 sessions/vCPU and explicit h2c transport |
 | Vertical multi-core scale-up | Elixir | 1.80X lift 1→2 vCPU |
-| Async-tier capacity without an async runtime | Rust/sync | 3150 sessions/vCPU from a hand-rolled epoll loop; ~9% short of Tokio |
+| Top capacity without an async runtime | Rust/sync | 4400 sessions/vCPU from two epoll loops on two OS threads; above C++ |
 | Modeling invariants as types | OCaml/OxCaml | opaque inflight capability, still runtime-enforced |
 | Free-threaded Python | wait | this stack is reliability-limited |
 
