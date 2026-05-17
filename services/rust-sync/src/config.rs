@@ -31,7 +31,12 @@ const DEFAULT_INFERENCE_URL: &str = "http://inference-server:9000";
 /// the comparison isolates the runtime, not the transport fan-out; one
 /// pooled HTTP/1.1 socket per *in-flight* request rather than one per
 /// gateway connection keeps the single event loop's fd count bounded.
-const DEFAULT_INFERENCE_CLIENTS: usize = 512;
+// HTTP/1.1 has no request multiplexing, so a pooled socket serves one
+// request at a time: steady-state slots-in-use ≈ sessions × request-RT.
+// A too-small pool exhausts under load (skipped flushes → oldest-frame
+// latency blows up). 2048 covers the measured envelope while still being
+// far below one-socket-per-session's fd fan-out.
+const DEFAULT_INFERENCE_CLIENTS: usize = 2048;
 const DEFAULT_CPU_PASSES: u32 = 4;
 const DEFAULT_MODEL_DELAY_MS: u64 = 75;
 const DEFAULT_FLUSH_INTERVAL_MS: u64 = 1000;

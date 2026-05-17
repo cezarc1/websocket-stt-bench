@@ -14,6 +14,7 @@ mod session;
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::io;
 use std::net::{SocketAddr, TcpListener as StdListener, ToSocketAddrs};
 use std::time::{Duration, Instant};
@@ -54,6 +55,28 @@ fn decode(token: Token) -> Source {
 
 type Timers = BinaryHeap<Reverse<(Instant, usize)>>;
 
+/// Connection ids are unique small integers, so hashing them is pure
+/// waste; an identity hasher removes SipHash from the per-event lookup
+/// on the ~170k-events/s hot path. Zero dependencies.
+#[derive(Default)]
+struct IdHasher(u64);
+
+impl Hasher for IdHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = self.0.rotate_left(8) ^ u64::from(b);
+        }
+    }
+    fn write_usize(&mut self, i: usize) {
+        self.0 = i as u64;
+    }
+}
+
+type ConnMap = HashMap<usize, Conn, BuildHasherDefault<IdHasher>>;
+
 fn main() -> io::Result<()> {
     let config = Config::from_env();
     let inference_addr = resolve(&config);
@@ -70,8 +93,8 @@ fn main() -> io::Result<()> {
     let mut poll = Poll::new()?;
     poll.registry()
         .register(&mut listener, LISTENER, Interest::READABLE)?;
-    let mut events = Events::with_capacity(1024);
-    let mut conns: HashMap<usize, Conn> = HashMap::new();
+    let mut events = Events::with_capacity(4096);
+    let mut conns: ConnMap = ConnMap::default();
     let mut timers: Timers = BinaryHeap::new();
     let mut pool = InferencePool::new(inference_addr, config.inference_clients);
     let mut next_id: usize = 1;
@@ -168,7 +191,7 @@ fn main() -> io::Result<()> {
 
 fn accept(
     listener: &TcpListener,
-    conns: &mut HashMap<usize, Conn>,
+    conns: &mut ConnMap,
     timers: &mut Timers,
     next_id: &mut usize,
     poll: &Poll,
