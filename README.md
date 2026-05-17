@@ -4,7 +4,9 @@
 
 This repo benchmarks streaming STT gateways behind one shared WebSocket protocol. Clients stream 16 kHz mono PCM at 20 ms / 640-byte frames; each gateway buffers per session, flushes every 1000 ms to a shared Rust inference simulator, and returns strict `partial` JSON messages.
 
-We bench:
+I also heavily used coding agents, with a benchmark harness to assess correctness and reproducability on k8s.
+
+I bench:
 - C++23 - uWebSockets/uSockets on Linux epoll
 - Python 3.14.4 and 3.14.4t - FastAPI, uvloop, Granian
 - Elixir 1.19.5 - Phoenix + Bandit on BEAM, raw WebSock
@@ -23,19 +25,19 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 
 *Concurrent WebSocket sessions sustained inside the [SLO](#the-slo-what-passing-means):*
 
-| Runtime | LOC | 1 vCPU | 2 vCPU | Bottleneck | Details |
-|---|---:|---:|---:|---|---|
-| **[C++23](https://en.cppreference.com/w/cpp/23) + [uWebSockets 20.77](https://github.com/uNetworking/uWebSockets)** | 1.6k | **4450** | **TBD** | CPU/latency | [runs](services/cpp23-uwebsockets/BENCHMARK.md) |
-| **[Rust 1.95](https://github.com/rust-lang/rust) + async [Axum](https://github.com/tokio-rs/axum) / [Tokio](https://github.com/tokio-rs/tokio)** | 696 | **3475** | **4250** (1.22X) | CPU | [runs](services/rust-axum/BENCHMARK.md) |
-| **[Java 25 LTS](https://openjdk.org/projects/jdk/25/) + [Helidon Níma 4.3](https://helidon.io/)** | 917 | 2625‡ | 3750 (1.43X) | latency, then heap/OOM cliff | [runs](services/java-helidon-nima/BENCHMARK.md) |
-| **[TypeScript](https://www.typescriptlang.org/) on [Bun 1.3.13](https://bun.sh/)** | 734 | 2550‡ | n/a | memory/error cliff; fetch caveat | [runs](services/typescript-bun/BENCHMARK.md) |
-| **[Go 1.26.3](https://go.dev/) + `net/http` / [`coder/websocket`](https://github.com/coder/websocket)** | 893 | 2500‡ | 4000 (1.60X) | CPU/latency | [runs](services/go-nethttp/BENCHMARK.md) |
-| **[OxCaml 5.2.0+ox](https://oxcaml.org/) + Async** | 1235 | 2075 | 3350§ (replicas) | CPU, single Async domain | [runs](services/ocaml-oxcaml/BENCHMARK.md) |
-| **OCaml 5.4.1 + Async** | 1236 | 1930 | TBD | CPU, single Async domain | [runs](services/ocaml-websocket-async/BENCHMARK.md) |
-| **[Scala 3.3 LTS](https://www.scala-lang.org/) + [Apache Pekko 1.6](https://pekko.apache.org/)** | 726 | 1400 | 2200 (1.57X) | connect timeouts | [runs](services/scala-pekko/BENCHMARK.md) |
-| **[Elixir 1.19.5](https://github.com/elixir-lang/elixir) + [Phoenix](https://github.com/phoenixframework/phoenix) / [Bandit](https://github.com/mtrudel/bandit)** | 784 | 1250 | 2250 (1.80X) | CPU/memory | [runs](services/elixir-phoenix/BENCHMARK.md) |
-| **[CPython 3.14.4](https://github.com/python/cpython) + uvloop + FastAPI / Granian** | 678 | 1100 | 1750 (1.59X)† | CPU | [runs](services/python-fastapi/BENCHMARK.md) |
-| **[CPython 3.14.4t](https://github.com/python/cpython) free-threaded + uvloop + FastAPI / Granian** | 678 | 180 | 205 (1.14X) | send/close timeout reliability | [runs](services/python-fastapi/BENCHMARK.md) |
+| Runtime | 1 vCPU | 2 vCPU | Bottleneck | LOC | Details |
+|---|---:|---:|---|---:|---|
+| **[C++23](https://en.cppreference.com/w/cpp/23) + [uWebSockets 20.77](https://github.com/uNetworking/uWebSockets)** | **4450** | **TBD** | CPU/latency | 1.6k | [runs](services/cpp23-uwebsockets/BENCHMARK.md) |
+| **[Rust 1.95](https://github.com/rust-lang/rust) + async [Axum](https://github.com/tokio-rs/axum) / [Tokio](https://github.com/tokio-rs/tokio)** | **3475** | **4250** (1.22X) | CPU | 696 | [runs](services/rust-axum/BENCHMARK.md) |
+| **[Java 25 LTS](https://openjdk.org/projects/jdk/25/) + [Helidon Níma 4.3](https://helidon.io/)** | 2625‡ | 3750 (1.43X) | latency, then heap/OOM cliff | 917 | [runs](services/java-helidon-nima/BENCHMARK.md) |
+| **[TypeScript](https://www.typescriptlang.org/) on [Bun 1.3.13](https://bun.sh/)** | 2550‡ | n/a | memory/error cliff; fetch caveat | 734 | [runs](services/typescript-bun/BENCHMARK.md) |
+| **[Go 1.26.3](https://go.dev/) + `net/http` / [`coder/websocket`](https://github.com/coder/websocket)** | 2500‡ | 4000 (1.60X) | CPU/latency | 893 | [runs](services/go-nethttp/BENCHMARK.md) |
+| **[OxCaml 5.2.0+ox](https://oxcaml.org/) + Async** | 2075 | 3350§ (replicas) | CPU, single Async domain | 1235 | [runs](services/ocaml-oxcaml/BENCHMARK.md) |
+| **OCaml 5.4.1 + Async** | 1930 | TBD | CPU, single Async domain | 1236 | [runs](services/ocaml-websocket-async/BENCHMARK.md) |
+| **[Scala 3.3 LTS](https://www.scala-lang.org/) + [Apache Pekko 1.6](https://pekko.apache.org/)** | 1400 | 2200 (1.57X) | connect timeouts | 726 | [runs](services/scala-pekko/BENCHMARK.md) |
+| **[Elixir 1.19.5](https://github.com/elixir-lang/elixir) + [Phoenix](https://github.com/phoenixframework/phoenix) / [Bandit](https://github.com/mtrudel/bandit)** | 1250 | 2250 (1.80X) | CPU/memory | 784 | [runs](services/elixir-phoenix/BENCHMARK.md) |
+| **[CPython 3.14.4](https://github.com/python/cpython) + uvloop + FastAPI / Granian** | 1100 | 1750 (1.59X)† | CPU | 678 | [runs](services/python-fastapi/BENCHMARK.md) |
+| **[CPython 3.14.4t](https://github.com/python/cpython) free-threaded + uvloop + FastAPI / Granian** | 180 | 205 (1.14X) | send/close timeout reliability | 678 | [runs](services/python-fastapi/BENCHMARK.md) |
 
 † Python scales out at 2 vCPU by adding worker processes; each Granian worker owns one asyncio loop.
 ‡ 1 vCPU / 2 GiB memory. The 1 GiB shape also OOMs near the edge, so the bumped 2 GiB shape is reported.
@@ -47,14 +49,16 @@ The above numbers are the highest confirmed session counts that passed the SLO a
 
 ## Takeaways
 
-- **C++ leads per vCPU; Rust, Java, Bun, and Go are still the broad high-throughput tier.**
-- **Async Rust is the best balance here:** 696 LOC and 3475 sessions/vCPU.
+- **No surpise that C++ leads per vCPU; async Rust is a distant second, which I am surprised by the gap. The GC'ed languages then follow with Java, TS, and Go are still the broad high-throughput tier.**
+- **Async Rust is likely the best balance here:** 696 LOC and 3475 sessions/vCPU. Both Claude Opus 4.6 (max) and GPT 4.5 (xhigh) had no issue writing Rust.
 - **Tail-latency SLOs expose GC jitter.** Passing requires p95 frame latency, not just average throughput, so allocation pressure, safepoints, and collection pauses can turn otherwise healthy throughput into latency cliffs. The size of that penalty is stack- and tuning-dependent, not a blanket verdict on every GC runtime.
-- **BEAM scales vertically better than it starts:** Elixir trails at 1 vCPU but has the cleanest 1→2 vCPU lift.
+- **Two managed-runtime clusters show up.** Java, Bun, and Go form the fast GC/managed tier around 2500-2625 sessions/vCPU, with Java narrowly ahead. Actor-style runtimes cluster lower at 1 vCPU: Elixir/BEAM at 1250 and Scala/Pekko at 1400, though both land near 2200-2250 at 2 vCPU; Scala still has a connect-timeout caveat.
+- **BEAM scales vertically really well but dissapoints overall:** Elixir trails at 1 vCPU but has the cleanest 1→2 vCPU lift. Similar story with Scala + actor framework. Perhaps this is a actor concurency model issue overall? TODO: investigate this.
 - **Bun is surprisingly competitive for a native WebSocket server path, but Bun `fetch` is not an h2c-parity transport.**
-- **OxCaml got close to Java only after raw transport work:** persistent keep-alive + zero-copy framing moved the confirmed ceiling from 1050 to 2075.
+- **OxCaml got close-ish to Java only after raw transport work:** persistent keep-alive + zero-copy framing moved the confirmed ceiling from 1050 to 2075. Jane Street looks to have made some noticeable improvements over OCaml with their fork. There are downsides as I couldn't use the standard async ocaml websockets framework with their fork, alas Claude had no problem writing a simple one from scratch. For a GC'ed non JVM language the perf seems impressive enough to me, it also reads extremely elegantly, only Elixir comes close.
 - **The stock OCaml gap was mostly transport:** replacing `cohttp-async` + `websocket-async` with the same raw Async TCP shape moved stock OCaml to 1930, within about 7% of OxCaml's confirmed 2075.
-- **Free-threaded Python with this FastAPI/Granian stack is reliability-limited today; treat it as a stack result, not a verdict on no-GIL Python.**
+- **Free-threaded Python with this FastAPI/Granian stack has issues; TODO: investigate this.**
+- **Some languages/runtimes were easier to prompt for than others.** Rust and Python took me one or two prompts. C++ needed me to take over and repeatedly steer towards C++ concepts I have long forgotten (RAII, move semantics, etc); OxCaml was easy but building was downright painful (30m or so to build, OxCaml desperately needs better tooling like pre-built docker images).
 
 **Pareto frontier:** Python (678 LOC / 1100 sessions, leanest) · Async Rust/Axum (696 LOC / 3475, best balance) · C++23 (1551 LOC / 4450, most capacity).
 
