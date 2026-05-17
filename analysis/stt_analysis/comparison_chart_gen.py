@@ -26,8 +26,8 @@ import matplotlib.pyplot as plt
 # (name, sessions at 1 vCPU, LOC, label dx_pts, dy_pts, horizontal alignment)
 RUNTIMES: list[tuple[str, int, int, int, int, str]] = [
     ("C++23 / uWebSockets", 4450, 1551, -10, -14, "right"),
-    ("Rust / Axum", 3475, 696, -10, 10, "right"),
-    ("Java / Helidon Nima", 2600, 917, 10, 10, "left"),
+    ("Async Rust / Axum", 3475, 696, -10, 10, "right"),
+    ("Java / Helidon Nima", 2625, 917, 10, 10, "left"),
     ("TypeScript / Bun", 2550, 734, 10, -14, "left"),
     ("Go / net/http", 2500, 893, 10, -14, "left"),
     ("OCaml / OxCaml", 2075, 1235, 10, 10, "left"),
@@ -41,7 +41,7 @@ RUNTIMES: list[tuple[str, int, int, int, int, str]] = [
 # AND lower LOC. Highlighted in yellow in the rendered chart.
 PARETO = {
     "C++23 / uWebSockets",
-    "Rust / Axum",
+    "Async Rust / Axum",
     "Python (uvloop + FastAPI)",
 }
 
