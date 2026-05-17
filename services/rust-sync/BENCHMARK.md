@@ -25,6 +25,10 @@ All k3s runs use 1000 ms flush cadence, 10 s warmup, 45 s measured, 30 s ramp, a
 
 Detailed per-point tables are not currently checked in for this service; the root README records the confirmed bracket and interpretation.
 
+## C++ baseline caveat (why this is framed vs async Rust, not C++)
+
+Verifying C++ on this exact harness/cluster showed the README's C++ 4450 is currently **not reproducible**: the C++ source did not build under Bazel 9.1.0 (native `py_binary` removed; dev-only `refresh_compile_commands` target — fixed here), and the only available C++ image (`sha-b2eed8f`) is pristine at 1000 sessions but **SIGSEGVs at ~2000** (a `WsSink` dangling-`uWS::WebSocket*` + reentrant-teardown use-after-free — also fixed here). On equal footing the only runnable C++ binary dies at 2000 while this gateway is confirmed to 3150 with zero errors. The harness itself is sound (C++ @1000 = identical clean baseline). The C++ fixes are committed but the rebuilt image can't be pushed from this branch (GHCR package-write perms), so a re-established C++ ceiling is a follow-up. This gateway is therefore compared to async Rust (3475, the credible same-harness comparator), not to the unverifiable C++ figure.
+
 ## Gaps
 
 A single event loop is one core. 2-vCPU capacity should be measured by replica fan-out rather than in-pod scale-up.
