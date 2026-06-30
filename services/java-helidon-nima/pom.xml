@@ -16,7 +16,7 @@
 
         <!-- Pinned versions (mirror repo's pinning ethos). -->
         <helidon.version>4.3.0</helidon.version>
-        <jackson.version>2.18.2</jackson.version>
+        <jackson.version>2.22.0</jackson.version>
         <junit.version>5.11.4</junit.version>
         <errorprone.version>2.36.0</errorprone.version>
         <nullaway.version>0.12.2</nullaway.version>
