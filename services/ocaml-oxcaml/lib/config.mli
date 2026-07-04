@@ -8,9 +8,8 @@
     cross-runtime env contract but are currently no-ops. The inference path already uses a
     persistent per-session keep-alive connection; the one-inflight-per-connection
     invariant makes requests on it strictly sequential, so a multi-connection pool would
-    add nothing — hence [inference_http_clients] stays a no-op. [worker_threads] is a
-    no-op while Async is single-domain; it will start mattering when [janestreet/parallel]
-    lands. *)
+    add nothing. [worker_threads] is a no-op while Async is single-domain; it will start
+    mattering when [janestreet/parallel] lands. *)
 
 type t =
   { port : int

@@ -72,12 +72,16 @@ let rec receive_loop ~session ~reader ~writer ~outbound_writer ~started =
        protocol_close ())
 ;;
 
-let run ~config ~inference ~reader ~writer =
+let run ~config ~inference ~diagnostics ~reader ~writer =
+  let session_id = Diagnostics.record_session_opened diagnostics in
   let outbound_reader, outbound_writer = Pipe.create () in
-  let session = Session.create ~config ~inference ~outbound:outbound_writer in
+  let session =
+    Session.create ~config ~inference ~diagnostics ~session_id ~outbound:outbound_writer
+  in
   let writer_done = writer_loop ~outbound_pipe:outbound_reader writer in
   let flush_done = Session.run_flush_loop session in
   let started = ref false in
   let recv_done = receive_loop ~session ~reader ~writer ~outbound_writer ~started in
-  Deferred.all_unit [ recv_done; writer_done; flush_done ]
+  let%map () = Deferred.all_unit [ recv_done; writer_done; flush_done ] in
+  Diagnostics.record_session_closed diagnostics ~session_id
 ;;
