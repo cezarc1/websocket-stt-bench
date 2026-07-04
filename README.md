@@ -31,7 +31,7 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 | **[C++23](https://en.cppreference.com/w/cpp/23) + [uWebSockets 20.77](https://github.com/uNetworking/uWebSockets)** | **4350**◆ | **TBD** | newest-p50 latency | 1.6k | [runs](services/cpp23-uwebsockets/BENCHMARK.md) |
 | **[Rust 1.95](https://github.com/rust-lang/rust) + async [Axum](https://github.com/tokio-rs/axum) / [Tokio](https://github.com/tokio-rs/tokio)** | **3475** | **4250** (1.22X) | CPU | 696 | [runs](services/rust-axum/BENCHMARK.md) |
 | **[Java 25 LTS](https://openjdk.org/projects/jdk/25/) + [Helidon Níma 4.3](https://helidon.io/)** | 2625‡ | 3750 (1.43X) | latency, then heap/OOM cliff | 917 | [runs](services/java-helidon-nima/BENCHMARK.md) |
-| **`oxcaml-epoll` — [OxCaml 5.2.0+ox](https://oxcaml.org/), Linux epoll, no Async** | 2625‡ | TBD | inference HTTP slot/error cliff | 1.6k | [runs](services/ocaml-oxcaml-epoll/BENCHMARK.md) |
+| **`oxcaml-epoll` — [OxCaml 5.2.0+ox](https://oxcaml.org/), Linux epoll, no Async** | 2625◊ | TBD | inference error frames at the cliff | 1.7k | [runs](services/ocaml-oxcaml-epoll/BENCHMARK.md) |
 | **[TypeScript](https://www.typescriptlang.org/) on [Bun 1.3.13](https://bun.sh/)** | 2550‡ | n/a | memory/error cliff; fetch caveat | 734 | [runs](services/typescript-bun/BENCHMARK.md) |
 | **[Go 1.26.3](https://go.dev/) + `net/http` / [`coder/websocket`](https://github.com/coder/websocket)** | 2500‡ | 4000 (1.60X) | CPU/latency | 893 | [runs](services/go-nethttp/BENCHMARK.md) |
 | **[OxCaml 5.2.0+ox](https://oxcaml.org/) + Async** | 2200 | 3350§ (replicas) | CPU, single Async domain | 879 | [runs](services/ocaml-oxcaml/BENCHMARK.md) |
@@ -43,6 +43,7 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 
 † Python scales out at 2 vCPU by adding worker processes; each Granian worker owns one asyncio loop.
 ‡ 1 vCPU / 2 GiB memory. The 1 GiB shape also OOMs near the edge, so the bumped 2 GiB shape is reported.
+◊ Measured on the pre-review-fix `sha-4cd2c96` image. The current branch has additional correctness fixes and needs a repeat k3s run before this becomes the branch's final capacity claim.
 § OxCaml runs one Async domain; a 2-vCPU pod does not use the second core meaningfully. Replica fan-out previously reached 3350 before the latest 1-vCPU tuning.
 ¶ No async runtime, zero new dependencies, plain HTTP/1.1. Two OS threads — a `mio`/epoll WebSocket loop + a dedicated inference loop (`std::sync::mpsc` + `mio::Waker`). [runs](services/rust-sync/BENCHMARK.md).
 ◆ Re-validated 2026-05-17 on the crash-fixed image: **4350 confirmed (2/2) ↔ 4400 first solid fail (2/2)**. See [runs](services/cpp23-uwebsockets/BENCHMARK.md).
@@ -58,10 +59,10 @@ The above numbers are the highest confirmed session counts that passed the SLO a
 - The biggest surprise: the per-vCPU leader is **Rust **, specifically a two-thread `mio`/epoll build (one WebSocket loop, one inference loop, plain HTTP/1.1, zero extra deps) at 4400 sessions/vCPU, just past C++ (4350).
 - Async Rust is still the best *balance*: @ 696 LOC and 3475 sessions/vCPU, the leanest of the high-capacity tier even though raw-capacity now goes to the no-runtime Rust build. Both Claude Opus (max) and GPT 4.5 (xhigh) had no issue writing Rust.
 - Tail-latency SLOs expose GC jitter. Passing requires p95 frame latency, not just average throughput, so allocation pressure, safepoints, and collection pauses can turn otherwise healthy throughput into latency cliffs. The size of that penalty is stack- and tuning-dependent, not a blanket verdict on every GC runtime.
-- Two managed-runtime clusters show up. Java, `oxcaml-epoll`, Bun, and Go form the fast GC/managed tier around 2500-2625 sessions/vCPU, with Java and `oxcaml-epoll` tied at the top on the 1-vCPU confirmed point. Actor-style runtimes cluster lower at 1 vCPU: Elixir/BEAM at 1250 and Scala/Pekko at 1400, though both land near 2200-2250 at 2 vCPU; Scala still has a connect-timeout caveat.
+- Two managed-runtime clusters show up. Java, `oxcaml-epoll`, Bun, and Go form the fast GC/managed tier around 2500-2625 sessions/vCPU, with Java and the pre-review-fix `oxcaml-epoll` image tied at the top on the 1-vCPU confirmed point. Actor-style runtimes cluster lower at 1 vCPU: Elixir/BEAM at 1250 and Scala/Pekko at 1400, though both land near 2200-2250 at 2 vCPU; Scala still has a connect-timeout caveat.
 - BEAM scales vertically really well but dissapoints overall: Elixir trails at 1 vCPU but has the cleanest 1→2 vCPU lift. Similar story with Scala + actor framework. Perhaps this is a actor concurency model issue overall? TODO: investigate this.
 - Bun is surprisingly competitive for a native WebSocket server path. It simply has no right beating Go and coming incredibly close to Java. Great job Bun! 👏
-- OxCaml splits into two useful data points. The Async implementation got close-ish only after raw transport work: persistent keep-alive + zero-copy framing moved the confirmed ceiling from 1050 to 2075, then GC/runtime tuning plus a lighter session buffer lifted the latest 1-vCPU point to 2200. The separate `oxcaml-epoll` variant removes Async entirely and reaches 2625 confirmed, matching Java's 1-vCPU point before failing at 2650 on rare inference error frames rather than latency. Jane Street looks to have made some noticeable improvements over OCaml with their fork. There are downsides as I couldn't use the standard async ocaml websockets framework with their fork, alas Claude had no problem writing a simple one from scratch. For a GC'ed non JVM language the perf seems impressive enough to me, it also reads extremely elegantly, only Elixir comes close.
+- OxCaml splits into two useful data points. The Async implementation got close-ish only after raw transport work: persistent keep-alive + zero-copy framing moved the confirmed ceiling from 1050 to 2075, then GC/runtime tuning plus a lighter session buffer lifted the latest 1-vCPU point to 2200. The separate `oxcaml-epoll` variant removes Async entirely and reached 2625 confirmed on the pre-review-fix image, matching Java's 1-vCPU point before failing at 2650 on rare inference error frames rather than latency. Jane Street looks to have made some noticeable improvements over OCaml with their fork. There are downsides as I couldn't use the standard async ocaml websockets framework with their fork, alas Claude had no problem writing a simple one from scratch. For a GC'ed non JVM language the perf seems impressive enough to me, it also reads extremely elegantly, only Elixir comes close.
 - The stock OCaml gap was mostly transport: replacing `cohttp-async` + `websocket-async` with the same raw Async TCP shape moved stock OCaml to 1930, within about 7% of OxCaml's earlier raw-transport baseline before the later GC/buffer tuning.
 - Free-threaded Python with this FastAPI/Granian stack has issues; TODO: investigate this.
 - Some languages/runtimes were easier to prompt for than others. Rust and Python took me one or two prompts. C++ needed me to take over and repeatedly steer towards C++ concepts I have long forgotten (RAII, move semantics, etc); OxCaml was easy but building was downright painful (30m or so to build, OxCaml desperately needs better tooling like pre-built docker images).
@@ -129,7 +130,7 @@ flowchart LR
 | Java | 917 | 917 | 16 | Helidon Níma virtual threads, sealed outbound messages |
 | Stock OCaml/Async | 850 | 1220 | 25 | raw `Async.Tcp`, hand-rolled RFC 6455, structural one-inflight flush loop |
 | Rust/sync (`mio`) | 1221 | 1221 | 6 | two `mio` epoll loops on two OS threads (no async runtime), `mpsc`+`Waker` handoff, bounded shared inference pool |
-| `oxcaml-epoll` | 1658 | 2093 | 15 | single Linux epoll loop, tiny C epoll stubs, fixed-frame WebSocket path, HTTP/1.1 inference slot pool |
+| `oxcaml-epoll` | 1680 | 2126 | 15 | single Linux epoll loop, tiny C epoll stubs, fixed-frame WebSocket path, HTTP/1.1 inference slot pool |
 | OxCaml | 879 | 1244 | 21 | raw `Async.Tcp`, hand-rolled RFC 6455, opaque inflight capability |
 | C++23 | 1551 | 1551 | 11 | uWebSockets loop-per-thread, libcurl HTTP/2, Glaze JSON |
 
@@ -145,7 +146,7 @@ The load-bearing invariant is one in-flight inference request per connection. Ev
 | Leanest of the high-capacity tier | Async Rust/Axum | 3475 sessions/vCPU in 696 LOC |
 | Maximum capacity in C++ | C++23/uWebSockets | 4350 sessions/vCPU (validated, crash-fixed) |
 | Rust-adjacent JVM capacity | Java/Helidon Níma | 2625 sessions/vCPU; watch heap at the cliff |
-| Java-level OxCaml capacity | `oxcaml-epoll` | 2625 sessions/vCPU; separate no-Async variant, watch inference-slot errors at the cliff |
+| Java-level OxCaml capacity | `oxcaml-epoll` | 2625 sessions/vCPU on the pre-review-fix image; separate no-Async variant, watch inference error frames at the cliff |
 | JS ecosystem with strong capacity | TypeScript on Bun | 2550 sessions/vCPU on native Bun primitives |
 | Go operational simplicity | Go/net-http | 2500 sessions/vCPU and explicit h2c transport |
 | Vertical multi-core scale-up | Elixir | 1.80X lift 1→2 vCPU |

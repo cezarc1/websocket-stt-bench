@@ -136,7 +136,6 @@ type pending =
   ; flush_lateness_ms : float
   ; started_ms : float
   ; timeout_gen : int
-  ; slot_idx : int
   }
 
 type conn =
@@ -258,9 +257,7 @@ let conn_events (c : conn) =
 
 let update_conn (s : server) (c : conn) =
   if not c.closed
-  then (
-    let events = conn_events c in
-    if events = 0 then () else Epoll.mod_ s.epoll c.fd ~events ~token:(conn_token c.id))
+  then Epoll.mod_ s.epoll c.fd ~events:(conn_events c) ~token:(conn_token c.id)
 ;;
 
 let clear_batch (c : conn) = c.batch_frames <- 0
@@ -487,10 +484,14 @@ let rec process_frames (s : server) (c : conn) =
          process_frames s c
        | Ws.Pong -> process_frames s c
        | Ws.Close ->
+         (* The benchmark only requires a normal close response; it does not echo client
+            close codes. *)
          enqueue_raw s c (Ws.close ~code:1000 ());
          c.close_after_write <- true;
          update_conn s c
-       | Ws.Continuation | Ws.Other _ -> enqueue_close s c 1002))
+       | Ws.Continuation | Ws.Other _ ->
+         (* Fragmentation is outside the benchmark protocol. *)
+         enqueue_close s c 1002))
 ;;
 
 let process_http (s : server) (c : conn) =
@@ -646,13 +647,18 @@ let build_request (s : server) (slot : slot) body body_len =
 ;;
 
 let classify_status status =
-  if status = 429 then P.Http_429, true else P.Http_5xx, status >= 500
+  if status = 429
+  then P.Http_429, true
+  else if status >= 400 && status < 500
+  then P.Http_4xx, false
+  else P.Http_5xx, status >= 500
 ;;
 
 let parse_http_response b =
   match Http_response.parse b.data ~len:b.len with
   | None -> None
-  | Some parsed -> Some (parsed.status, parsed.body_pos, parsed.body_len)
+  | Some parsed ->
+    Some (parsed.status, parsed.has_content_length, parsed.body_pos, parsed.body_len)
 ;;
 
 let make_transport_error kind message elapsed_ms : P.error =
@@ -781,10 +787,27 @@ let drive_slot (s : server) (slot : slot) =
         append_bytes slot.resp slot.resp_scratch 0 n;
         (match parse_http_response slot.resp with
          | None -> loop ()
-         | Some (status, body_pos, body_len) ->
-           if status < 200 || status >= 300
+         | Some (status, has_content_length, body_pos, body_len) ->
+           if not has_content_length
+           then (
+             close_slot_fd s slot;
+             slot_done
+               s
+               slot
+               (Error
+                  { (make_transport_error
+                       P.Parse_error
+                       "inference response missing Content-Length"
+                       (now_ms () -. slot.started_ms))
+                    with
+                    P.stage = P.Inference_response_parse
+                  ; inference_status = Some status
+                  ; retryable = false
+                  }))
+           else if status < 200 || status >= 300
            then (
              let kind, retryable = classify_status status in
+             close_slot_fd s slot;
              slot_done
                s
                slot
@@ -882,7 +905,6 @@ let flush_conn (s : server) (c : conn) now =
           ; flush_lateness_ms
           ; started_ms = now
           ; timeout_gen = c.timeout_gen + 1
-          ; slot_idx = -1
           }
         in
         c.timeout_gen <- p.timeout_gen;

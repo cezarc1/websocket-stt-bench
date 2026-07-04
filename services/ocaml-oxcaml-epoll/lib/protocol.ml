@@ -33,6 +33,7 @@ type error_stage =
 type error_kind =
   | Timeout
   | Connection_reset
+  | Http_4xx
   | Http_5xx
   | Http_429
   | Parse_error
@@ -63,6 +64,7 @@ let stage_to_wire = function
 let kind_to_wire = function
   | Timeout -> "timeout"
   | Connection_reset -> "connection_reset"
+  | Http_4xx -> "http_4xx"
   | Http_5xx -> "http_5xx"
   | Http_429 -> "http_429"
   | Parse_error -> "parse_error"

@@ -51,6 +51,52 @@ let contains haystack needle =
   nlen = 0 || loop 0
 ;;
 
+let write_all fd data =
+  let rec loop pos =
+    if pos < String.length data
+    then (
+      let wrote = Unix.write_substring fd data pos (String.length data - pos) in
+      if wrote = 0 then Alcotest.fail "socket write returned zero";
+      loop (pos + wrote))
+  in
+  loop 0
+;;
+
+let create_closed_pending_conn s =
+  let conn_peer, conn_fd = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  close_quiet conn_peer;
+  let conn = Server.create_conn s conn_fd in
+  conn.closed <- true;
+  let pending : Server.pending =
+    { oldest_seq = 1
+    ; newest_seq = 1
+    ; oldest_ms = 0.0
+    ; newest_ms = 0.0
+    ; frames = 1
+    ; audio_bytes = 640
+    ; flush_lateness_ms = 0.0
+    ; started_ms = 0.0
+    ; timeout_gen = 1
+    }
+  in
+  conn.pending <- Some pending;
+  Hashtbl.add s.conns conn.id conn;
+  conn
+;;
+
+let prepare_receiving_slot s idx response =
+  let peer, slot_fd = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  write_all peer response;
+  close_quiet peer;
+  let conn = create_closed_pending_conn s in
+  let slot = s.slots.(idx) in
+  slot.fd <- Some slot_fd;
+  slot.owner <- Some conn.id;
+  slot.state <- Server.Slot_receiving;
+  slot.retried <- true;
+  conn, slot
+;;
+
 let test_signal_handlers_ignore_sigpipe () =
   Sys.Safe.set_signal Sys.sigpipe Sys.Signal_default;
   Server.install_process_signal_handlers ();
@@ -104,34 +150,7 @@ let test_readable_hup_drains_complete_inference_response () =
         (String.length body)
         body
     in
-    let peer, slot_fd = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
-    let wrote = Unix.write_substring peer response 0 (String.length response) in
-    Alcotest.(check int) "wrote response" (String.length response) wrote;
-    close_quiet peer;
-    let conn_peer, conn_fd = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
-    close_quiet conn_peer;
-    let conn = Server.create_conn s conn_fd in
-    conn.closed <- true;
-    let pending : Server.pending =
-      { oldest_seq = 1
-      ; newest_seq = 1
-      ; oldest_ms = 0.0
-      ; newest_ms = 0.0
-      ; frames = 1
-      ; audio_bytes = 640
-      ; flush_lateness_ms = 0.0
-      ; started_ms = 0.0
-      ; timeout_gen = 1
-      ; slot_idx = idx
-      }
-    in
-    conn.pending <- Some pending;
-    Hashtbl.add s.conns conn.id conn;
-    let slot = s.slots.(idx) in
-    slot.fd <- Some slot_fd;
-    slot.owner <- Some conn.id;
-    slot.state <- Server.Slot_receiving;
-    slot.retried <- true;
+    let conn, slot = prepare_receiving_slot s idx response in
     Server.handle_event
       s
       ~token:(Server.slot_token slot.idx)
@@ -145,6 +164,57 @@ let test_readable_hup_drains_complete_inference_response () =
       "not delivered as error"
       false
       (contains output {|"type":"error"|});
+    Alcotest.(check int)
+      "free stack restored"
+      (Int_stack.capacity s.free_slots)
+      (Int_stack.length s.free_slots))
+;;
+
+let test_missing_content_length_response_closes_slot_and_errors () =
+  with_server 1 (fun s ->
+    let idx = pop_free_slot s in
+    let response = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nignored-body" in
+    let conn, slot = prepare_receiving_slot s idx response in
+    Server.handle_event
+      s
+      ~token:(Server.slot_token slot.idx)
+      ~events:(Epoll.epollin lor Epoll.epollhup);
+    let output = Bytes.sub_string conn.output.out 0 conn.output.out_len in
+    Alcotest.(check bool)
+      "missing length delivered as error"
+      true
+      (contains output {|"type":"error"|});
+    Alcotest.(check bool)
+      "missing length is parse error"
+      true
+      (contains output {|"kind":"parse_error"|});
+    Alcotest.(check bool) "slot fd closed" true (Option.is_none slot.fd);
+    Alcotest.(check int)
+      "free stack restored"
+      (Int_stack.capacity s.free_slots)
+      (Int_stack.length s.free_slots))
+;;
+
+let test_http_4xx_response_is_non_retryable_and_closes_slot () =
+  with_server 1 (fun s ->
+    let idx = pop_free_slot s in
+    let response = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n" in
+    let conn, slot = prepare_receiving_slot s idx response in
+    Server.handle_event s ~token:(Server.slot_token slot.idx) ~events:Epoll.epollin;
+    let output = Bytes.sub_string conn.output.out 0 conn.output.out_len in
+    Alcotest.(check bool)
+      "4xx delivered as http_4xx"
+      true
+      (contains output {|"kind":"http_4xx"|});
+    Alcotest.(check bool)
+      "4xx is not retryable"
+      true
+      (contains output {|"retryable":false|});
+    Alcotest.(check bool)
+      "status is preserved"
+      true
+      (contains output {|"inference_status":400|});
+    Alcotest.(check bool) "slot fd closed" true (Option.is_none slot.fd);
     Alcotest.(check int)
       "free stack restored"
       (Int_stack.capacity s.free_slots)
@@ -171,6 +241,14 @@ let () =
             "readable HUP drains complete inference response"
             `Quick
             test_readable_hup_drains_complete_inference_response
+        ; Alcotest.test_case
+            "missing content length response closes slot and errors"
+            `Quick
+            test_missing_content_length_response_closes_slot_and_errors
+        ; Alcotest.test_case
+            "HTTP 4xx response is non-retryable and closes slot"
+            `Quick
+            test_http_4xx_response_is_non_retryable_and_closes_slot
         ] )
     ]
 ;;

@@ -206,6 +206,23 @@ let test_http_response_parser_waits_for_body () =
   | Some _ -> Alcotest.fail "partial response must not parse"
 ;;
 
+let test_http_response_parser_skips_content_length_prefix_without_colon () =
+  let response =
+    Bytes.of_string
+      "HTTP/1.1 200 OK\r\nContent-Lengthish: nope\r\nContent-Length: 5\r\n\r\nhello"
+  in
+  match
+    Stt_ocaml_oxcaml_epoll.Http_response.parse response ~len:(Bytes.length response)
+  with
+  | None -> Alcotest.fail "expected complete response"
+  | Some parsed ->
+    Alcotest.(check int) "body_len" 5 parsed.body_len;
+    Alcotest.(check string)
+      "body"
+      "hello"
+      (Bytes.sub_string response parsed.body_pos parsed.body_len)
+;;
+
 let test_http_request_writer_matches_inference_header () =
   let host = "stt-inference-server.stt-bench.svc.cluster.local" in
   let expected =
@@ -374,6 +391,10 @@ let () =
             "http response parser waits for body"
             `Quick
             test_http_response_parser_waits_for_body
+        ; Alcotest.test_case
+            "http response parser skips content length prefix without colon"
+            `Quick
+            test_http_response_parser_skips_content_length_prefix_without_colon
         ; Alcotest.test_case
             "http request writer matches inference header"
             `Quick

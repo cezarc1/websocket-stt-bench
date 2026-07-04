@@ -2,6 +2,7 @@ type parsed =
   { status : int
   ; body_pos : int
   ; body_len : int
+  ; has_content_length : bool
   }
 
 let find_double_crlf b len =
@@ -70,7 +71,7 @@ let matches_ascii_ci b pos stop s =
 let content_length b head_end =
   let rec line_start i =
     if i >= head_end
-    then 0
+    then None
     else (
       let line_stop =
         match Bytes.index_from_opt b i '\n' with
@@ -86,8 +87,8 @@ let content_length b head_end =
       then (
         let colon = i + String.length "content-length" in
         if colon < stop && Bytes.get b colon = ':'
-        then parse_int b (colon + 1) stop
-        else 0)
+        then Some (parse_int b (colon + 1) stop)
+        else line_start (line_stop + 1))
       else line_start (line_stop + 1))
   in
   line_start 0
@@ -98,8 +99,19 @@ let parse b ~len =
   | None -> None
   | Some head_end ->
     let body_pos = head_end + 4 in
-    let body_len = content_length b head_end in
+    let content_length = content_length b head_end in
+    let body_len =
+      match content_length with
+      | None -> 0
+      | Some len -> len
+    in
     if len < body_pos + body_len
     then None
-    else Some { status = status b head_end; body_pos; body_len }
+    else
+      Some
+        { status = status b head_end
+        ; body_pos
+        ; body_len
+        ; has_content_length = Option.is_some content_length
+        }
 ;;

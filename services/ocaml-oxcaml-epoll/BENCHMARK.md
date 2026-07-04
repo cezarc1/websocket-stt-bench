@@ -4,7 +4,7 @@
 
 | Shape | Result | Bottleneck |
 |---|---:|---|
-| 1 vCPU / 2 GiB | 2625 confirmed | inference HTTP slot/error cliff |
+| 1 vCPU / 2 GiB | 2625 confirmed on pre-review-fix image | inference error frames at the cliff |
 | 2 vCPU / 2 GiB | TBD | not measured |
 
 `oxcaml-epoll` is a separate no-Async OxCaml variant. It keeps the same
@@ -12,15 +12,17 @@ WebSocket protocol, flush cadence, inference service, pod shape, and SLO gates
 as the Async OxCaml implementation, but replaces Async with one Linux epoll
 loop and explicit nonblocking WebSocket and HTTP/1.1 inference state machines.
 
-The current 1-vCPU bracket matches Java's confirmed point: 2625 sessions passed
-twice, while 2650 failed twice on the error budget. The 2650 failures were not
+The measured 1-vCPU bracket matches Java's confirmed point: 2625 sessions
+passed twice, while 2650 failed twice on the error budget. Those k3s runs used
+the pre-review-fix image listed below. Re-run the current branch image before
+treating 2625 as the branch's final capacity claim. The 2650 failures were not
 latency collapses: newest-frame p95 stayed below 200 ms, with zero protocol
 errors and zero loadgen timeouts. The failures were gateway-emitted inference
 error frames.
 
 ## Implementation Shape
 
-Application size: 1658 LOC. Raw production size: 2093 LOC across 15 files.
+Application size: 1680 LOC. Raw production size: 2126 LOC across 15 files.
 
 The gateway uses Linux epoll through tiny C stubs, nonblocking accept/read/write,
 a fixed 640-byte masked WebSocket frame fast path after `start`, a reusable
@@ -31,7 +33,7 @@ the benchmark invariant of at most one in-flight inference request per
 connection.
 
 The README chart uses application LOC for cross-runtime fairness. For
-`oxcaml-epoll`, that excludes 435 code-only lines of generic first-party
+`oxcaml-epoll`, that excludes 446 code-only lines of generic first-party
 transport/crypto shim (`Base64`, `Sha1`, HTTP helpers, WebSocket framing and
 handshake, masking) that package-backed runtimes get from dependencies. The raw
 production count still includes that shipped code. Comments and blank lines are
@@ -48,8 +50,17 @@ Image measured:
 (`sha256:91bdb355c7a102a09eb558c82b3b7c4afbf18dff1442e83188f8ce7959af25ed`).
 Later post-review correctness fixes ignore SIGPIPE, reject invalid 64-bit
 WebSocket lengths, guard stale inference-slot events, and drain readable
-inference responses before treating HUP as fatal. Re-measure 2650 before
-making a new capacity claim for the fixed code.
+inference responses before treating HUP as fatal. A second review pass also
+made missing `Content-Length` responses close their inference socket, classified
+non-429 HTTP 4xx responses as `http_4xx`, and fixed a `Content-Length` header
+prefix parser trap. Re-measure 2625 and 2650 before making a final capacity
+claim for the fixed code.
+
+Current-tree local validation:
+
+- `just oxcaml-epoll-portable-test` passed.
+- `just oxcaml-epoll-test` passed.
+- `just oxcaml-epoll-conformance` passed on 2026-07-04.
 
 | Sessions | Result | Newest p50 / p95 | Oldest p50 / p95 | Flush lateness p50 / p95 | Errors |
 |---:|---|---:|---:|---:|---:|
