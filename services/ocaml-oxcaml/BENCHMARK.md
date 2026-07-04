@@ -4,11 +4,11 @@
 
 | Shape | Result | Bottleneck |
 |---|---:|---|
-| 1 vCPU / 2 GiB | 2075 confirmed | CPU, single Async domain |
+| 1 vCPU / 2 GiB | 2200 confirmed | CPU, single Async domain |
 | one 2-vCPU pod | ~2125 | no second-core lift |
 | two 1-vCPU replicas | 3350 confirmed | replica fan-out |
 
-OxCaml reached the Go/Bun tier only after raw transport work: fresh inference connect per flush capped at 1050, persistent keep-alive moved it to 1750, and a zero-copy frame path moved it to 2075.
+OxCaml reached the Go/Bun tier only after raw transport work: fresh inference connect per flush capped at 1050, persistent keep-alive moved it to 1750, and a zero-copy frame path moved it to 2075. A later performance pass with `OCAMLRUNPARAM=s=16777216` and a lighter session buffer moved the current 1-vCPU point to 2200; 2250 remains borderline/failing on newest-frame p50.
 
 ## Implementation Shape
 
@@ -23,6 +23,13 @@ An attempted `@ unique` compile-time proof did not survive `Async`'s un-mode-ann
 ## Capacity Evidence
 
 All k3s runs use 1000 ms flush cadence, 10 s warmup, 45 s measured, 30 s ramp, and 1000 ms session-start spread.
+
+**2026-07-04 performance push, 1 vCPU / 2 GiB** — kept the same harness and pod shape, accepted only the 16 MiB minor heap runtime setting plus the mutable per-session batch buffer. Diagnostics/tracing were present but default-off. The accepted 2200 run had zero protocol errors, inference errors, or timeouts. At 2250, one probe passed, then two repeats failed the 200 ms newest-frame p50 SLO at 205-206 ms.
+
+| Sessions | Result | Newest p50 / p95 | Oldest p50 / p95 | Flush lateness p50 / p95 |
+|---:|---|---:|---:|---:|
+| 2200 | pass, current chart point | 194 / 255 ms | 1175 / 1232 ms | 1.90 / 11.65 ms |
+| 2250 | borderline/fail, newest p50 | 198-206 / 263-273 ms | 1179-1188 / 1243-1253 ms | 1.89-1.90 / 11.78-12.30 ms |
 
 **1 vCPU / 2 GiB, tuned keep-alive + zero-copy** — bracketed 2075 confirmed ↔ 2100 borderline ↔ 2125 first solid fail. Artifacts were under `results/ocaml-oxcaml-1vcpu-2gib-20260516-tuned/`. The first solid failure is pure latency with zero protocol/inference/timeout errors.
 
@@ -60,4 +67,4 @@ Ceiling is roughly 2125, within 1-vCPU node variance. The extra core sits idle b
 | 3450 | fail, newest p50 | 216 / 278 ms | 1197 / 1257 ms |
 | 3750 | fail, latency collapse | 644 / 838 ms | 1626 / 1817 ms |
 
-Confirmed 3350 ↔ 3450, a 1.61X lift over single-pod 2075 with zero errors.
+Confirmed 3350 ↔ 3450, a 1.61X lift over the then-current single-pod 2075 with zero errors. This replica fan-out point has not been re-swept after the 2026-07-04 1-vCPU tuning.

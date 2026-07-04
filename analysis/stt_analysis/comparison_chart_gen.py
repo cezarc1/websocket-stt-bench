@@ -34,7 +34,7 @@ RUNTIMES: list[tuple[str, int, int, int, int, str]] = [
     ("Java / Helidon Nima", 2625, 917, 10, 10, "left"),
     ("TypeScript / Bun", 2550, 734, 10, -14, "left"),
     ("Go / net/http", 2500, 893, 10, -14, "left"),
-    ("OxCaml", 2075, 879, 10, 10, "left"),
+    ("OxCaml", 2200, 879, 10, 10, "left"),
     ("OCaml", 1930, 850, 10, -14, "left"),
     ("Scala / Pekko", 1400, 726, 10, -14, "left"),
     ("Elixir / Phoenix", 1250, 784, 10, 10, "left"),

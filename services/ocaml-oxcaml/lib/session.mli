@@ -33,6 +33,8 @@ type t
 val create
   :  config:Config.t
   -> inference:Inference.t
+  -> diagnostics:Diagnostics.t
+  -> session_id:int
   -> outbound:string Pipe.Writer.t
   -> t
 

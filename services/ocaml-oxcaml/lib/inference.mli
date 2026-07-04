@@ -13,12 +13,11 @@ open! Core
     sequential, so one long-lived socket per session is both correct and optimal (no pool)
     and removes the per-flush connect+handshake that otherwise caps the gateway on
     connection churn. A stale/closed socket is transparently redialed once before a flush
-    is reported as an error. Every request is bounded by {!request_timeout}. h2c is future
-    work. *)
+    is reported as an error. Every request is bounded by {!request_timeout}. *)
 
 type t
 
-val create : Config.t -> t
+val create : ?diagnostics:Diagnostics.t -> Config.t -> t
 
 (** Per-session persistent connection state. Create one per WebSocket session and thread
     it through every {!send}. *)
@@ -48,7 +47,8 @@ val request_timeout : Time_ns.Span.t
     [body_len] is their total length. They are written straight to the socket after the
     request head — no concat buffer. *)
 val send
-  :  t
+  :  ?trace_tid:int
+  -> t
   -> conn:conn
   -> capability:Inflight_capability.t
   -> body:string list

@@ -17,6 +17,7 @@ FROM ${OPAM_BASE_IMAGE} AS build
 
 ARG OXCAML_SWITCH
 ARG OXCAML_REPO_COMMIT
+ARG OXCAML_BUILD_JOBS=1
 
 USER root
 RUN apt-get update \
@@ -35,6 +36,11 @@ RUN apt-get update \
 USER opam
 WORKDIR /home/opam
 
+# Docker Desktop amd64 emulation can fail OxCaml's nested make jobserver
+# path with "write jobserver: Bad file descriptor"; keep compiler image
+# builds single-job. This is build-only and does not affect runtime.
+ENV OPAMJOBS=${OXCAML_BUILD_JOBS}
+
 # Create the OxCaml switch with the ox repo prepended to the resolver
 # search path (matches https://oxcaml.org/get-oxcaml/). Adding the ox
 # repo to the BASE switch first would inherit the stock-5.2 invariant
@@ -49,6 +55,13 @@ RUN OX_REPO="git+https://github.com/oxcaml/opam-repository.git" \
       --yes \
  && opam clean
 
+USER root
+RUN mkdir -p /home/opam/.cache/dune \
+ && chown -R opam:opam /home/opam/.cache
+
+USER opam
+ENV DUNE_CACHE_ROOT=/home/opam/.cache/dune
+
 # Dep closure as its own cached layer so source-only rebuilds skip it.
 # We don't pin versions: the OxCaml repo invariant pins many of these to
 # +ox/~preview variants whose numbers diverge from upstream; opam
@@ -61,7 +74,7 @@ RUN --mount=type=cache,target=/home/opam/.opam/download-cache,uid=1000,gid=1000 
     core \
     core_unix \
     async \
-    parallel \
+    chrome-trace \
     yojson \
     ppx_jane \
     alcotest \
