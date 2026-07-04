@@ -6,7 +6,7 @@ toward the Java virtual-thread result.
 
 ## Current Measured Candidate
 
-- Variant: `ocaml-oxcaml-epoll`
+- Variant: `oxcaml-epoll`
 - Entry point: `services/ocaml-oxcaml-epoll`
 - k3s service/deployment: `stt-ocaml-oxcaml-epoll-gateway`
 - Port: `9200`

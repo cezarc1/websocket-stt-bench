@@ -12,6 +12,7 @@ let first_slot_token = 2
 let first_conn_token = 10000
 let request_timeout_ms = 2000.0
 let now_ms () = Unix.gettimeofday () *. 1000.0
+let install_process_signal_handlers () = Sys.Safe.set_signal Sys.sigpipe Sys.Signal_ignore
 
 type dynbuf =
   { mutable data : Bytes.t
@@ -201,6 +202,19 @@ let slot_token idx = first_slot_token + idx
 let token_slot token = token - first_slot_token
 let timer_flush = 0
 let timer_timeout = 1
+let slot_is_free slot = slot.state = Slot_idle && slot.owner = None
+
+let slot_can_handle_event slot =
+  match slot.state, slot.owner with
+  | Slot_idle, _ | _, None -> false
+  | (Slot_connecting | Slot_sending | Slot_receiving), Some _ -> true
+;;
+
+let slot_has_readable_response_event slot events =
+  slot.state = Slot_receiving && events land Epoll.epollin <> 0
+;;
+
+let has_socket_error_event events = events land (Epoll.epollerr lor Epoll.epollhup) <> 0
 
 let schedule_flush (s : server) (c : conn) =
   Timer_heap.push
@@ -583,12 +597,15 @@ let close_slot_fd (s : server) (slot : slot) =
 ;;
 
 let free_slot (s : server) (slot : slot) =
-  unregister_slot s slot;
-  slot.owner <- None;
-  slot.state <- Slot_idle;
-  slot.req_pos <- 0;
-  clear slot.resp;
-  Int_stack.push s.free_slots slot.idx
+  if slot_is_free slot
+  then ()
+  else (
+    unregister_slot s slot;
+    slot.owner <- None;
+    slot.state <- Slot_idle;
+    slot.req_pos <- 0;
+    clear slot.resp;
+    Int_stack.push s.free_slots slot.idx)
 ;;
 
 let connect_slot (s : server) (slot : slot) =
@@ -1030,9 +1047,16 @@ let handle_event s ~token ~events =
   else if token >= first_slot_token && token < first_slot_token + Array.length s.slots
   then (
     let slot = s.slots.(token_slot token) in
-    if events land (Epoll.epollerr lor Epoll.epollhup) <> 0
-    then retry_or_fail s slot "inference socket error"
-    else drive_slot s slot)
+    if slot_can_handle_event slot
+    then (
+      let readable_response = slot_has_readable_response_event slot events in
+      if readable_response then drive_slot s slot;
+      if slot_can_handle_event slot
+      then
+        if has_socket_error_event events
+        then retry_or_fail s slot "inference socket error"
+        else if not readable_response
+        then drive_slot s slot))
   else if token >= first_conn_token
   then (
     match Hashtbl.find_opt s.conns (token_conn token) with

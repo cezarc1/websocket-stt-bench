@@ -126,6 +126,19 @@ let test_websocket_parses_masked_binary_frame () =
   | Error e -> Alcotest.fail e
 ;;
 
+let test_websocket_rejects_negative_64_bit_length () =
+  let frame = Bytes.make 14 '\000' in
+  Bytes.set frame 0 (Char.chr 0x82);
+  Bytes.set frame 1 (Char.chr (0x80 lor 127));
+  Bytes.set_int64_be frame 2 Int64.min_int;
+  Bytes.blit_string "\001\002\003\004" 0 frame 10 4;
+  match Stt_ocaml_oxcaml_epoll.Ws.parse_one frame ~pos:0 ~len:(Bytes.length frame) with
+  | Error "frame too large" -> ()
+  | Error message -> Alcotest.failf "unexpected error: %s" message
+  | Ok None -> Alcotest.fail "expected oversized frame rejection"
+  | Ok (Some _) -> Alcotest.fail "negative 64-bit length must not parse"
+;;
+
 let test_mask_copy_unmasked_640_preserves_offsets () =
   let payload = Bytes.init 640 (fun i -> Char.chr (i * 17 land 0xff)) in
   let mask = Bytes.of_string "\017\034\051\068" in
@@ -341,6 +354,10 @@ let () =
             "websocket parses masked binary frame"
             `Quick
             test_websocket_parses_masked_binary_frame
+        ; Alcotest.test_case
+            "websocket rejects negative 64-bit length"
+            `Quick
+            test_websocket_rejects_negative_64_bit_length
         ; Alcotest.test_case
             "mask copy unmasked 640 preserves offsets"
             `Quick

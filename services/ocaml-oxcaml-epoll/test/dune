@@ -1,3 +1,9 @@
 (test
  (name test_stt_ocaml_oxcaml_epoll)
  (libraries alcotest stt_ocaml_oxcaml_epoll yojson))
+
+(test
+ (name test_linux_server)
+ (enabled_if
+  (= %{system} linux))
+ (libraries alcotest stt_ocaml_oxcaml_epoll stt_ocaml_oxcaml_epoll_linux))

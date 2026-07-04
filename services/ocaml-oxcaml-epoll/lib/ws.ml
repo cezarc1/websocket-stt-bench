@@ -44,7 +44,7 @@ let parse_len b pos stop base_len =
   then Ok None
   else (
     let full = Bytes.get_int64_be b pos in
-    if full > Int64.of_int (1 lsl 30)
+    if Int64.compare full 0L < 0 || Int64.compare full (Int64.of_int (1 lsl 30)) > 0
     then Error "frame too large"
     else Ok (Some (Int64.to_int full, pos + 8)))
 ;;
