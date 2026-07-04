@@ -82,6 +82,7 @@ evidence.
 The preflight helper defaults to the current commit's workflow-published
 `ghcr.io/cezarc1/websocket-stt-bench/ocaml-oxcaml-epoll:sha-<shortsha>` image
 tag; pass an explicit image only when intentionally measuring a different
-published tag. Default-image mode requires a clean worktree because the tag
-always points at committed `HEAD`; explicit-image mode reports the source
-commit and worktree state for traceability.
+published tag. Default-image mode requires a clean worktree and pushed `HEAD`
+because the tag is built by GitHub Actions from the remote branch. Explicit
+image mode reports the source commit, upstream commit, and worktree state for
+traceability.

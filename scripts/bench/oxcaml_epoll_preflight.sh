@@ -55,6 +55,7 @@ done
 branch="$(git -C "$ROOT" branch --show-current)"
 head_sha="$(git -C "$ROOT" rev-parse HEAD)"
 short_sha="$(git -C "$ROOT" rev-parse --short=7 HEAD)"
+upstream_sha="$(git -C "$ROOT" rev-parse --verify '@{u}' 2>/dev/null || true)"
 default_image=0
 worktree_state="clean"
 if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
@@ -64,6 +65,10 @@ if [ -z "$IMAGE" ]; then
   default_image=1
   if [ "$worktree_state" = "dirty" ]; then
     echo "dirty worktree; commit changes before using the default sha image tag, or pass --image explicitly" >&2
+    exit 2
+  fi
+  if [ -z "$upstream_sha" ] || [ "$upstream_sha" != "$head_sha" ]; then
+    echo "local HEAD is not pushed to the upstream branch; push before using the default sha image tag, or pass --image explicitly" >&2
     exit 2
   fi
   IMAGE="ghcr.io/cezarc1/websocket-stt-bench/ocaml-oxcaml-epoll:sha-$short_sha"
@@ -95,6 +100,7 @@ cat <<OUT
 epoll preflight ok
 
 Source commit: $head_sha
+Upstream commit: ${upstream_sha:-none}
 Worktree state: $worktree_state
 Image selection: $([ "$default_image" -eq 1 ] && printf 'default sha tag' || printf 'explicit image')
 

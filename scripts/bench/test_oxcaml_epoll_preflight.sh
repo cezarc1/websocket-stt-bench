@@ -51,6 +51,13 @@ case "${args[*]}" in
   "rev-parse --short=7 HEAD")
     printf '4cd2c96'
     ;;
+  "rev-parse --verify @{u}")
+    if [ "${OXCAML_EPOLL_TEST_GIT_UNPUSHED:-0}" = "1" ]; then
+      printf '1111111111111111111111111111111111111111'
+    else
+      printf '4cd2c969df71c94fb587088a7bf70a95dfba5491'
+    fi
+    ;;
   "status --porcelain")
     if [ "${OXCAML_EPOLL_TEST_GIT_DIRTY:-0}" = "1" ]; then
       printf ' M scripts/bench/oxcaml_epoll_preflight.sh\n'
@@ -74,6 +81,11 @@ just_default_output="$(PATH="$TMPDIR:$PATH" just --justfile "$ROOT/justfile" --w
 set +e
 dirty_output="$(PATH="$TMPDIR:$PATH" OXCAML_EPOLL_TEST_GIT_DIRTY=1 "$SCRIPT" --context dry-run-context --namespace stt-bench 2>&1)"
 dirty_rc=$?
+set -e
+
+set +e
+unpushed_output="$(PATH="$TMPDIR:$PATH" OXCAML_EPOLL_TEST_GIT_UNPUSHED=1 "$SCRIPT" --context dry-run-context --namespace stt-bench 2>&1)"
+unpushed_rc=$?
 set -e
 
 assert_contains() {
@@ -106,6 +118,10 @@ if ! grep -Fq -- "Source commit: $head_sha" <<<"$default_output"; then
   echo "expected default preflight output to report the source commit" >&2
   exit 1
 fi
+if ! grep -Fq -- "Upstream commit: $head_sha" <<<"$default_output"; then
+  echo "expected default preflight output to report the upstream commit" >&2
+  exit 1
+fi
 if ! grep -Eq -- "Worktree state: (clean|dirty)" <<<"$default_output"; then
   echo "expected default preflight output to report clean or dirty worktree state" >&2
   exit 1
@@ -122,5 +138,15 @@ fi
 if ! grep -Fq -- "dirty worktree; commit changes before using the default sha image tag" <<<"$dirty_output"; then
   echo "expected dirty default-image preflight to explain the committed-HEAD requirement" >&2
   echo "$dirty_output" >&2
+  exit 1
+fi
+if [ "$unpushed_rc" -ne 2 ]; then
+  echo "expected unpublished default-image preflight to fail with status 2, got $unpushed_rc" >&2
+  echo "$unpushed_output" >&2
+  exit 1
+fi
+if ! grep -Fq -- "local HEAD is not pushed to the upstream branch" <<<"$unpushed_output"; then
+  echo "expected unpublished default-image preflight to explain the upstream requirement" >&2
+  echo "$unpushed_output" >&2
   exit 1
 fi
