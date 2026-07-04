@@ -9,15 +9,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 NS="${NS:-stt-bench}"
 CTX="${CTX:-}"
-IMAGE=""
+IMAGE="${IMAGE:-}"
 SESS="${SESS:-2200}"
 
 usage() {
   cat >&2 <<'USAGE'
-usage: oxcaml_epoll_preflight.sh --image IMAGE [--sessions N] [--namespace NS] [--context CTX]
+usage: oxcaml_epoll_preflight.sh [--image IMAGE] [--sessions N] [--namespace NS] [--context CTX]
 
 Validates local epoll benchmark wiring without mutating GitHub, Docker
 registries, or Kubernetes. Prints the approval-gated commands to run next.
+If --image is omitted, uses the current commit's workflow-published sha tag.
 USAGE
 }
 
@@ -51,18 +52,27 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+branch="$(git -C "$ROOT" branch --show-current)"
+head_sha="$(git -C "$ROOT" rev-parse HEAD)"
+short_sha="$(git -C "$ROOT" rev-parse --short=7 HEAD)"
+default_image=0
+worktree_state="clean"
+if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
+  worktree_state="dirty"
+fi
 if [ -z "$IMAGE" ]; then
-  usage
-  echo "--image is required" >&2
-  exit 2
+  default_image=1
+  if [ "$worktree_state" = "dirty" ]; then
+    echo "dirty worktree; commit changes before using the default sha image tag, or pass --image explicitly" >&2
+    exit 2
+  fi
+  IMAGE="ghcr.io/cezarc1/websocket-stt-bench/ocaml-oxcaml-epoll:sha-$short_sha"
 fi
 
 if [[ "$IMAGE" != *"/ocaml-oxcaml-epoll:"* ]]; then
   echo "--image must point at an ocaml-oxcaml-epoll tag: $IMAGE" >&2
   exit 2
 fi
-
-branch="$(git -C "$ROOT" branch --show-current)"
 
 bash "$ROOT/scripts/bench/test_oxcaml_epoll_source_guards.sh"
 bash "$ROOT/scripts/bench/test_oxcaml_epoll_deploy.sh"
@@ -83,6 +93,10 @@ kubectl apply --dry-run=client -f - <<<"$manifest" >/dev/null
 
 cat <<OUT
 epoll preflight ok
+
+Source commit: $head_sha
+Worktree state: $worktree_state
+Image selection: $([ "$default_image" -eq 1 ] && printf 'default sha tag' || printf 'explicit image')
 
 Approval-gated next commands:
   gh workflow run images.yml --ref $branch -f image=ocaml-oxcaml-epoll

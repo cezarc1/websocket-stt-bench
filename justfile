@@ -206,9 +206,14 @@ oxcaml-epoll-portable-test: ensure-oxcaml-switch
 oxcaml-epoll-preflight-test:
     bash scripts/bench/test_oxcaml_epoll_k3s_point.sh
     bash scripts/bench/test_oxcaml_epoll_preflight.sh
+    bash scripts/bench/test_oxcaml_onechange_metadata.sh
 
-oxcaml-epoll-preflight image sessions="2200":
-    scripts/bench/oxcaml_epoll_preflight.sh --image "{{image}}" --sessions "{{sessions}}"
+oxcaml-epoll-preflight image="" sessions="2200":
+    @if [ -n "{{image}}" ]; then \
+      scripts/bench/oxcaml_epoll_preflight.sh --image "{{image}}" --sessions "{{sessions}}"; \
+    else \
+      scripts/bench/oxcaml_epoll_preflight.sh --sessions "{{sessions}}"; \
+    fi
 
 # Linux-only no-Async OxCaml epoll experiment. The C stubs cannot build on
 # macOS, so the focused check is a Docker linux/amd64 build that runs tests

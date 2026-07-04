@@ -49,6 +49,8 @@ Deliberately not applied yet:
   timeouts.
 - Do not accept a change that materially worsens `flush_lateness.p95_ms`.
 - Store run artifacts under `results/oxcaml-onechange-<timestamp>/`.
+  Metadata and the experiments index record both the requested gateway image
+  tag and the live gateway pod image digest.
 - Reject `GATEWAY_REPLICAS` values other than `1` before mutating the cluster.
 - Confirm the epoll Deployment reports exactly one desired replica and one
   ready replica before measuring.
@@ -72,8 +74,14 @@ just oxcaml-epoll-portable-test
 just oxcaml-epoll-check
 just oxcaml-epoll-conformance
 just oxcaml-epoll-smoke
-just oxcaml-epoll-preflight ghcr.io/cezarc1/websocket-stt-bench/ocaml-oxcaml-epoll:<tag>
+just oxcaml-epoll-preflight
 ```
 
 The smoke target is only a crash/protocol sanity check. It is not capacity
 evidence.
+The preflight helper defaults to the current commit's workflow-published
+`ghcr.io/cezarc1/websocket-stt-bench/ocaml-oxcaml-epoll:sha-<shortsha>` image
+tag; pass an explicit image only when intentionally measuring a different
+published tag. Default-image mode requires a clean worktree because the tag
+always points at committed `HEAD`; explicit-image mode reports the source
+commit and worktree state for traceability.
