@@ -99,6 +99,11 @@ spec:
                 --repeat 1 \
                 --samples-out /results/${PREFIX}.samples.csv \
                 > /results/${PREFIX}.summary.json 2>/results/${PREFIX}.warn.log || true
+              if [ -s /results/${PREFIX}.warn.log ]; then
+                echo "::loadgen-warn-log::"
+                cat /results/${PREFIX}.warn.log
+                echo "::summary-json::"
+              fi
               cat /results/${PREFIX}.summary.json
           resources:
             requests: { cpu: "${LOADGEN_CPU}", memory: ${LOADGEN_MEM} }
@@ -122,6 +127,13 @@ POD=$(kubectl "${KCTX[@]}" -n "$NS" get pod -l "job-name=${JOB}" \
 LOG=$(kubectl "${KCTX[@]}" -n "$NS" logs "${POD}" 2>/dev/null || true)
 JSON=$(printf '%s\n' "$LOG" | awk '/^\{/{f=1} f' | head -c 200000)
 mkdir -p "$RESULTS_DIR"
+printf '%s\n' "$LOG" \
+  | awk '
+      /^::loadgen-warn-log::$/ { f=1; next }
+      /^::summary-json::$/ { f=0; next }
+      /^\{/ { f=0 }
+      f
+    ' > "${RESULTS_DIR}/${PREFIX}.warn.log"
 printf '%s' "$JSON" > "${RESULTS_DIR}/${PREFIX}.summary.json"
 
 printf '%s' "$JSON" | python3 "$(dirname "$0")/eval_slo.py" "$SESS"
