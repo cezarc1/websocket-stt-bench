@@ -23,6 +23,8 @@
 /services/typescript-bun/node_modules/
 /services/ocaml-oxcaml/_build/
 /services/ocaml-oxcaml/_opam/
+/services/ocaml-oxcaml-epoll/_build/
+/services/ocaml-oxcaml-epoll/_opam/
 /services/ocaml-websocket-async/_build/
 /services/ocaml-websocket-async/_opam/
 

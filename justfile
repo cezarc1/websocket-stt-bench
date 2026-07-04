@@ -197,6 +197,68 @@ ocaml-test: ensure-oxcaml-switch
 ocaml-fmt: ensure-oxcaml-switch
     cd services/ocaml-oxcaml && opam exec --switch "$(awk -F\" '/oxcaml_switch =/{print $2; exit}' ../../versions.lock.toml)" -- dune build @fmt --auto-promote --root .
 
+oxcaml-epoll-portable-test: ensure-oxcaml-switch
+    bash scripts/bench/test_oxcaml_epoll_source_guards.sh
+    bash scripts/bench/test_oxcaml_epoll_deploy.sh
+    cd services/ocaml-oxcaml-epoll && opam exec --switch "$(awk -F\" '/oxcaml_switch =/{print $2; exit}' ../../versions.lock.toml)" -- dune build @fmt --root .
+    cd services/ocaml-oxcaml-epoll && opam exec --switch "$(awk -F\" '/oxcaml_switch =/{print $2; exit}' ../../versions.lock.toml)" -- dune runtest --root .
+
+oxcaml-epoll-preflight-test:
+    bash scripts/bench/test_oxcaml_epoll_k3s_point.sh
+    bash scripts/bench/test_oxcaml_epoll_preflight.sh
+
+oxcaml-epoll-preflight image sessions="2200":
+    scripts/bench/oxcaml_epoll_preflight.sh --image "{{image}}" --sessions "{{sessions}}"
+
+# Linux-only no-Async OxCaml epoll experiment. The C stubs cannot build on
+# macOS, so the focused check is a Docker linux/amd64 build that runs tests
+# in the image build stage.
+oxcaml-epoll-test:
+    arch="$(uname -m)"; \
+    case "$arch" in arm64|aarch64) default_platform=linux/arm64 ;; x86_64|amd64) default_platform=linux/amd64 ;; *) default_platform=linux/amd64 ;; esac; \
+    platform="${OXCAMLEPOLL_PLATFORM:-$default_platform}"; \
+    docker buildx build --platform "$platform" -f docker/ocaml-oxcaml-epoll.Dockerfile --target build .
+
+oxcaml-epoll-check:
+    arch="$(uname -m)"; \
+    case "$arch" in arm64|aarch64) default_platform=linux/arm64 ;; x86_64|amd64) default_platform=linux/amd64 ;; *) default_platform=linux/amd64 ;; esac; \
+    platform="${OXCAMLEPOLL_PLATFORM:-$default_platform}"; \
+    docker buildx build --platform "$platform" -f docker/ocaml-oxcaml-epoll.Dockerfile .
+
+oxcaml-epoll-conformance:
+    cleanup() { docker compose --profile single --profile loadgen down >/dev/null 2>&1 || true; }; \
+    trap cleanup EXIT; \
+    docker compose --profile single --profile loadgen build inference-server ocaml-oxcaml-epoll-single loadgen; \
+    docker compose --profile single up -d --no-build inference-server ocaml-oxcaml-epoll-single; \
+    docker compose --profile loadgen run --rm --no-deps \
+      --entrypoint /usr/local/bin/stt-conformance \
+      loadgen \
+      --service ocaml-oxcaml-epoll-single=ws://ocaml-oxcaml-epoll-single:9200/ws/stt
+
+oxcaml-epoll-smoke sessions="50" warmup="3" measure="10" ramp="5" spread="100" out="":
+    out_dir="{{out}}"; \
+    if [ -z "$out_dir" ]; then out_dir="/tmp/oxcaml-epoll-smoke-$(date -u +%Y%m%dT%H%M%SZ)"; fi; \
+    mkdir -p "$out_dir"; \
+    cleanup() { docker compose --profile single --profile loadgen down >/dev/null 2>&1 || true; }; \
+    trap cleanup EXIT; \
+    docker compose --profile single --profile loadgen build inference-server ocaml-oxcaml-epoll-single loadgen; \
+    docker compose --profile single up -d --no-build inference-server ocaml-oxcaml-epoll-single; \
+    docker compose --profile loadgen run --rm --no-deps \
+      -v "$out_dir:/results" \
+      --entrypoint /usr/local/bin/stt-loadgen \
+      loadgen \
+      --url ws://ocaml-oxcaml-epoll-single:9200/ws/stt \
+      --service-name ocaml-oxcaml-epoll-local-smoke \
+      --sessions "{{sessions}}" \
+      --warmup-secs "{{warmup}}" \
+      --measure-secs "{{measure}}" \
+      --ramp-up-secs "{{ramp}}" \
+      --session-start-spread-ms "{{spread}}" \
+      --repeat 1 \
+      --samples-out /results/ocaml-oxcaml-epoll-local-smoke.samples.csv \
+      | tee "$out_dir/ocaml-oxcaml-epoll-local-smoke.summary.json"; \
+    printf '\nsummary: %s\n' "$out_dir/ocaml-oxcaml-epoll-local-smoke.summary.json"
+
 # Stock OCaml Async/WebSocket gateway. By default this uses the pinned
 # `ocaml_stock.opam_switch`; set OCAML_STOCK_SWITCH=default to reuse an existing
 # stock 5.4.1 switch on a local machine.
@@ -269,6 +331,7 @@ conformance: compose-build
       scala-pekko-single \
       cpp23-uwebsockets-single \
       ocaml-oxcaml-single \
+      ocaml-oxcaml-epoll-single \
       ocaml-websocket-async-single; \
     docker compose --profile loadgen run --rm --no-deps \
       --entrypoint /usr/local/bin/stt-conformance \
@@ -284,6 +347,7 @@ conformance: compose-build
       --service scala-pekko-single=ws://scala-pekko-single:2500/ws/stt \
       --service cpp23-uwebsockets-single=ws://cpp23-uwebsockets-single:1500/ws/stt \
       --service ocaml-oxcaml-single=ws://ocaml-oxcaml-single:9000/ws/stt \
+      --service ocaml-oxcaml-epoll-single=ws://ocaml-oxcaml-epoll-single:9200/ws/stt \
       --service ocaml-websocket-async-single=ws://ocaml-websocket-async-single:9100/ws/stt
 
 compose-single:

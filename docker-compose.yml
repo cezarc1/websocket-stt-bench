@@ -61,6 +61,18 @@ x-ocaml-build: &ocaml-build
     OXCAML_SWITCH: "5.2.0+ox"
     OXCAML_REPO_COMMIT: "main"
 
+x-ocaml-epoll-build: &ocaml-epoll-build
+  context: .
+  dockerfile: docker/ocaml-oxcaml-epoll.Dockerfile
+  # Linux-only no-Async OxCaml experiment. The image builds the OxCaml
+  # switch and C epoll stubs hermetically; local macOS builds only run the
+  # portable protocol tests.
+  args:
+    OPAM_BASE_IMAGE: "ocaml/opam:debian-12-ocaml-5.2"
+    DEBIAN_RUNTIME_IMAGE: "debian:12-slim"
+    OXCAML_SWITCH: "5.2.0+ox"
+    OXCAML_REPO_COMMIT: "main"
+
 x-ocaml-websocket-build: &ocaml-websocket-build
   context: .
   dockerfile: docker/ocaml-websocket-async.Dockerfile
@@ -178,6 +190,17 @@ x-ocaml-env: &ocaml-env
   FLUSH_INTERVAL_MS: "1000"
   FLUSH_PHASE_JITTER_MS: "1000"
   PORT: "9000"
+  INFERENCE_URL: "http://inference-server:9000"
+
+x-ocaml-epoll-env: &ocaml-epoll-env
+  CPU_PASSES: "4"
+  MODEL_DELAY_MS: "75"
+  # HTTP/1.1 pool slots are non-multiplexed; keep this wide enough that the
+  # epoll experiment measures gateway CPU, not client-side inference queueing.
+  INFERENCE_HTTP_CLIENTS: "512"
+  FLUSH_INTERVAL_MS: "1000"
+  FLUSH_PHASE_JITTER_MS: "1000"
+  PORT: "9200"
   INFERENCE_URL: "http://inference-server:9000"
 
 x-ocaml-websocket-env: &ocaml-websocket-env
@@ -583,6 +606,31 @@ services:
       WORKER_THREADS: "4"
     ports:
       - "9001:9000"
+
+  # Experimental no-Async OxCaml gateway: one Linux epoll loop with explicit
+  # WebSocket and HTTP/1.1 inference state machines.
+  ocaml-oxcaml-epoll-single:
+    <<: *app-single
+    mem_limit: 2g
+    profiles: ["single"]
+    build: *ocaml-epoll-build
+    depends_on: *needs-inference
+    environment:
+      <<: *ocaml-epoll-env
+      WORKER_THREADS: "1"
+    ports:
+      - "9201:9200"
+
+  ocaml-oxcaml-epoll-multi:
+    <<: *app-multi
+    profiles: ["multi"]
+    build: *ocaml-epoll-build
+    depends_on: *needs-inference
+    environment:
+      <<: *ocaml-epoll-env
+      WORKER_THREADS: "4"
+    ports:
+      - "9201:9200"
 
   # Stock OCaml 5.4.1 + Async raw WebSocket gateway for upstream-OCaml
   # behavior without the OxCaml compiler/runtime fork.

@@ -311,6 +311,22 @@ gateways:
       limits:
         cpu: "1"
         memory: 2Gi
+  ocamlOxcamlEpoll:
+    enabled: true
+    name: stt-ocaml-oxcaml-epoll-gateway
+    image: ocaml-oxcaml-epoll
+    replicas: 0
+    port: 9200
+    env:
+      WORKER_THREADS: "1"
+      INFERENCE_HTTP_CLIENTS: "512"
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
   ocamlOxcaml2cpu:
     enabled: true
     name: stt-ocaml-oxcaml-2vcpu-gateway

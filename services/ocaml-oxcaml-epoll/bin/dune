@@ -1,0 +1,7 @@
+(executable
+ (name main)
+ (public_name stt-ocaml-oxcaml-epoll)
+ (package stt_ocaml_oxcaml_epoll)
+ (enabled_if
+  (= %{system} linux))
+ (libraries stt_ocaml_oxcaml_epoll_linux))

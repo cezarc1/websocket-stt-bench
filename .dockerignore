@@ -12,6 +12,9 @@ services/elixir-phoenix/deps/
 services/elixir-phoenix/doc/
 services/elixir-phoenix/.elixir_ls/
 services/typescript-bun/node_modules/
+services/ocaml-oxcaml/_build/
+services/ocaml-oxcaml-epoll/_build/
+services/ocaml-websocket-async/_build/
 
 **/__pycache__/
 *.log
