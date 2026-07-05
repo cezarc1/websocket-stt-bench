@@ -10,6 +10,7 @@ NS="${NS:-stt-bench}"
 CTX="${CTX:-}"
 IMAGE=""
 REPLICAS="${REPLICAS:-0}"
+INFERENCE_HTTP_CLIENTS="${INFERENCE_HTTP_CLIENTS:-512}"
 MODE="print"
 
 usage() {
@@ -127,7 +128,7 @@ spec:
             - name: WORKER_THREADS
               value: "1"
             - name: INFERENCE_HTTP_CLIENTS
-              value: "512"
+              value: "${INFERENCE_HTTP_CLIENTS}"
           readinessProbe:
             httpGet:
               path: /health
