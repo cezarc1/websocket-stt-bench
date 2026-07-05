@@ -1,27 +1,13 @@
 # websocket-stt-bench
 
 ## How many concurrent websocket audio-streaming sessions can modern async/actor runtimes sustain per vCPU?
+![Concurrent sessions vs. LOC at 1 vCPU](docs/loc-vs-capacity.png)
 
 This repo benchmarks streaming STT gateways behind one shared WebSocket protocol. Clients stream 16 kHz mono PCM at 20 ms / 640-byte frames; each gateway buffers per session, flushes every 1000 ms to a shared Rust inference simulator, and returns strict `partial` JSON messages.
-
-I also heavily used coding agents, with a benchmark harness to assess correctness and reproducability on k8s.
-
-I bench:
-- C++23 - uWebSockets/uSockets on Linux epoll
-- Python 3.14.4 and 3.14.4t - FastAPI, uvloop, Granian
-- Elixir 1.19.5 - Phoenix + Bandit on BEAM, raw WebSock
-- Rust 1.95 - async Axum/Tokio, and a two-thread `mio`/epoll build
-- TypeScript - Bun 1.3.13, Bun.serve WebSockets
-- Go 1.26.3 - net/http and coder/websocket
-- Java 25 LTS - Helidon Níma with virtual threads
-- Scala 3.3 LTS - Pekko actors on the JVM
-- OCaml - [OxCaml 5.2.0+ox](https://oxcaml.org/) with Async and `oxcaml-epoll`, plus OCaml 5.4.1 + Async
 
 Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/index.html) and Karpathy's [autoresearch](https://github.com/karpathy/autoresearch).
 
 ## TL;DR
-
-![Concurrent sessions vs. LOC at 1 vCPU](docs/loc-vs-capacity.png)
 
 *Concurrent WebSocket sessions sustained inside the [SLO](#the-slo-what-passing-means):*
 
