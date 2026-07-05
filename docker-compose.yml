@@ -197,7 +197,7 @@ x-ocaml-epoll-env: &ocaml-epoll-env
   MODEL_DELAY_MS: "75"
   # HTTP/1.1 pool slots are non-multiplexed; keep this wide enough that the
   # epoll experiment measures gateway CPU, not client-side inference queueing.
-  INFERENCE_HTTP_CLIENTS: "512"
+  INFERENCE_HTTP_CLIENTS: "1024"
   FLUSH_INTERVAL_MS: "1000"
   FLUSH_PHASE_JITTER_MS: "1000"
   PORT: "9200"

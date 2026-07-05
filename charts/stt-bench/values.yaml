@@ -319,7 +319,7 @@ gateways:
     port: 9200
     env:
       WORKER_THREADS: "1"
-      INFERENCE_HTTP_CLIENTS: "512"
+      INFERENCE_HTTP_CLIENTS: "1024"
     resources:
       requests:
         cpu: "1"

@@ -4,7 +4,7 @@
 
 | Shape | Result | Bottleneck |
 |---|---:|---|
-| 1 vCPU / 2 GiB | 2625 confirmed on pre-review-fix image | inference error frames at the cliff |
+| 1 vCPU / 2 GiB | 2900 confirmed | newest-p50 latency around 3000 |
 | 2 vCPU / 2 GiB | TBD | not measured |
 
 `oxcaml-epoll` is a separate no-Async OxCaml variant. It keeps the same
@@ -12,13 +12,14 @@ WebSocket protocol, flush cadence, inference service, pod shape, and SLO gates
 as the Async OxCaml implementation, but replaces Async with one Linux epoll
 loop and explicit nonblocking WebSocket and HTTP/1.1 inference state machines.
 
-The measured 1-vCPU bracket matches Java's confirmed point: 2625 sessions
-passed twice, while 2650 failed twice on the error budget. Those k3s runs used
-the pre-review-fix image listed below. Re-run the current branch image before
-treating 2625 as the branch's final capacity claim. The 2650 failures were not
-latency collapses: newest-frame p95 stayed below 200 ms, with zero protocol
-errors and zero loadgen timeouts. The failures were gateway-emitted inference
-error frames.
+The measured 1-vCPU bracket is now above Java's confirmed point: 2900 sessions
+passed twice, while 3000 is borderline and failed once on newest-frame p50
+latency. With the original 512-slot inference pool, the fixed image could still
+emit rare gateway error frames near 2650. The diagnostic loadgen identified
+those as local `inference_request` / `connection_reset` frames with message
+`inference pool exhausted`. Widening the non-multiplexed HTTP/1.1 inference slot
+pool to 1024 removed that error cliff; the remaining edge is latency, not
+protocol or inference-status errors.
 
 ## Implementation Shape
 
@@ -45,45 +46,59 @@ All k3s runs use 1000 ms flush cadence, 10 s warmup, 45 s measured, 30 s ramp,
 1000 ms session-start spread, one 1-vCPU gateway pod, four inference pods, and
 the official SLO gates.
 
-Image measured:
-`ghcr.io/cezarc1/websocket-stt-bench/ocaml-oxcaml-epoll:sha-4cd2c96`
-(`sha256:91bdb355c7a102a09eb558c82b3b7c4afbf18dff1442e83188f8ce7959af25ed`).
-Later post-review correctness fixes ignore SIGPIPE, reject invalid 64-bit
-WebSocket lengths, guard stale inference-slot events, and drain readable
-inference responses before treating HUP as fatal. A second review pass also
-made missing `Content-Length` responses close their inference socket, classified
-non-429 HTTP 4xx responses as `http_4xx`, and fixed a `Content-Length` header
-prefix parser trap. Re-measure 2625 and 2650 before making a final capacity
-claim for the fixed code.
+Gateway image measured:
+`ghcr.io/cezarc1/websocket-stt-bench/ocaml-oxcaml-epoll:sha-f2e04e8`
+(`sha256:5f6dcf21a60d1c1d27840714b1a85a458578573557e4c96b0756486dd9b771ea`).
+That image includes the post-review correctness fixes: SIGPIPE ignored, invalid
+64-bit WebSocket lengths rejected, stale inference-slot events guarded, readable
+HUP drained before treating HUP as fatal, missing `Content-Length` responses
+closing their inference socket, non-429 HTTP 4xx classified as `http_4xx`, and a
+`Content-Length` prefix parser trap fixed.
+
+The 1024-slot edge runs used diagnostic loadgen image
+`ghcr.io/cezarc1/websocket-stt-bench/loadgen:sha-5b764c5`
+(`sha256:e9d930fd709fa45ce70e26c0b9bfc3afe6eb5311b170858710a3d23a4b4f7dd0`),
+which adds error-kind counters to the summary JSON without changing the SLO
+gates, timings, pod shape, or protocol traffic.
+Those accepted runs set `INFERENCE_HTTP_CLIENTS=1024` in the gateway
+Deployment; the branch defaults now match that setting.
 
 Current-tree local validation:
 
+- `cargo test --locked -p stt-loadgen` passed.
 - `just oxcaml-epoll-portable-test` passed.
 - `just oxcaml-epoll-test` passed.
-- `just oxcaml-epoll-conformance` passed on 2026-07-04.
+- `just oxcaml-epoll-check` passed.
+- `just oxcaml-epoll-conformance` passed on 2026-07-05.
 
 | Sessions | Result | Newest p50 / p95 | Oldest p50 / p95 | Flush lateness p50 / p95 | Errors |
 |---:|---|---:|---:|---:|---:|
-| 2200 | pass | 104 / 150 ms | 1084 / 1126 ms | 0.17 / 2.43 ms | 0 |
-| 2400 | pass | 108 / 154 ms | 1089 / 1130 ms | 0.39 / 5.94 ms | 0 |
-| 2500 | pass | 110 / 162 ms | 1092 / 1139 ms | 0.51 / 8.19 ms | 0 |
-| 2600 | pass | 110 / 163 ms | 1091 / 1138 ms | 0.50 / 8.70 ms | 0 |
-| 2625 | pass, confirmed (2x) | 110-111 / 161-171 ms | 1091-1093 / 1136-1144 ms | 0.50-0.58 / 7.41-9.97 ms | 0 |
-| 2650 | fail, error budget (2x) | 113-117 / 187-193 ms | 1094-1099 / 1157-1165 ms | 0.68-0.99 / 12.00-14.44 ms | 37, 190 |
+| 2650 | pass, confirmed (2x), 1024 slots | 111-113 / 173-183 ms | 1093-1094 / 1146-1154 ms | 0.59-0.69 / 10.35-11.73 ms | 0 |
+| 2700 | pass, 1024 slots | 115 / 186 ms | 1097 / 1157 ms | 0.77 / 12.92 ms | 0 |
+| 2750 | pass, 1024 slots | 111 / 174 ms | 1093 / 1146 ms | 0.59 / 9.62 ms | 0 |
+| 2800 | pass, 1024 slots | 118 / 209 ms | 1101 / 1179 ms | 1.43 / 16.53 ms | 0 |
+| 2850 | pass, 1024 slots | 127 / 220 ms | 1110 / 1191 ms | 1.54 / 18.85 ms | 0 |
+| 2900 | pass, confirmed (2x), 1024 slots | 123-140 / 219-237 ms | 1107-1125 / 1189-1207 ms | 1.99-2.88 / 18.25-21.70 ms | 0 |
+| 3000 | borderline, 1024 slots | 137 pass, 211 fail / 243-272 ms | 1124-1188 / 1209-1251 ms | 9.64-9.90 / 21.49-27.30 ms | 0 |
 
 Artifacts for the confirmed and failed edge points:
 
-- `results/oxcaml-onechange-20260704T210248Z/epoll-4cd2c96-r1-2625.summary.json`
-- `results/oxcaml-onechange-20260704T210727Z/epoll-4cd2c96-r2-2625.summary.json`
-- `results/oxcaml-onechange-20260704T210505Z/epoll-4cd2c96-r1-2650.summary.json`
-- `results/oxcaml-onechange-20260704T210948Z/epoll-4cd2c96-r2-2650.summary.json`
+- `results/oxcaml-onechange-20260705T002616Z/epoll-slots1024-r1-2900-2900.summary.json`
+- `results/oxcaml-onechange-20260705T002833Z/epoll-slots1024-r2-2900-2900.summary.json`
+- `results/oxcaml-onechange-20260705T003045Z/epoll-slots1024-r1-3000-3000.summary.json`
+- `results/oxcaml-onechange-20260705T003302Z/epoll-slots1024-r2-3000-3000.summary.json`
+- `results/oxcaml-onechange-20260705T000915Z/epoll-f2e04e8-diag-r3-2650-2650.summary.json`
 
 ## Notes
 
-The 2650 failure mode needs narrower instrumentation before making a stronger
-claim about the exact branch. Loadgen counts `inference_errors` when it receives
-a gateway `ServerMessage::Error`; the current preserved artifacts include the
-aggregate count, not the warning log lines with the exact `kind` and `message`.
-The next diagnostic run should record error-kind counters for pool exhaustion,
-connection reset, HTTP status, parse error, and inference timeout, and should
-check whether the readable-HUP slot fix changes the 2650 error cliff.
+The 512-slot fixed-image diagnostic run at 2650 failed with 89 inference error
+frames, all `inference_request` / `connection_reset` with message `inference
+pool exhausted`. That made the first accepted optimization after the corrected
+image an env/config change, not a parser or GC change: raise
+`INFERENCE_HTTP_CLIENTS` from 512 to 1024 for the epoll variant.
+
+After the slot-pool change, the 3000-session failure had zero protocol errors,
+zero inference errors, and zero loadgen timeouts; it failed only
+`newest_p50=211>200`. The next bottleneck to investigate is therefore gateway
+latency under CPU pressure, not inference response parsing or HTTP status
+handling.

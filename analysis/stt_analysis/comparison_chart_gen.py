@@ -32,7 +32,7 @@ RUNTIMES: list[tuple[str, int, int, int, int, str]] = [
     ("C++23 / uWebSockets", 4350, 1551, -10, -14, "right"),
     ("Async Rust / Tokio", 3475, 696, 10, 10, "left"),
     ("Java / Helidon Nima", 2625, 917, 10, 10, "left"),
-    ("oxcaml-epoll (pre-fix)", 2625, 1680, -10, 10, "right"),
+    ("oxcaml-epoll", 2900, 1680, -10, 10, "right"),
     ("TypeScript / Bun", 2550, 734, 10, -14, "left"),
     ("Go / net/http", 2500, 893, 10, -14, "left"),
     ("OxCaml", 2200, 879, 10, 10, "left"),

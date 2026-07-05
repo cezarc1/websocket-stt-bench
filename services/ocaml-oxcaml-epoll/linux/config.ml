@@ -50,7 +50,7 @@ let load () =
   { port = int_env "PORT" 9200
   ; inference_host
   ; inference_port
-  ; inference_http_clients = max 1 (int_env "INFERENCE_HTTP_CLIENTS" 512)
+  ; inference_http_clients = max 1 (int_env "INFERENCE_HTTP_CLIENTS" 1024)
   ; cpu_passes = max 1 (int_env "CPU_PASSES" 4)
   ; model_delay_ms = max 0 (int_env "MODEL_DELAY_MS" 75)
   ; flush_interval_ms = max 1 (int_env "FLUSH_INTERVAL_MS" 1000)

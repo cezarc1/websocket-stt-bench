@@ -7,7 +7,7 @@ RUN_POINT="$ROOT/scripts/bench/run_point.sh"
 IMAGE="ghcr.io/example/ocaml-oxcaml-epoll:test"
 
 manifest="$("$SCRIPT" --print-manifest --image "$IMAGE")"
-override_manifest="$(INFERENCE_HTTP_CLIENTS=1024 "$SCRIPT" --print-manifest --image "$IMAGE")"
+override_manifest="$(INFERENCE_HTTP_CLIENTS=2048 "$SCRIPT" --print-manifest --image "$IMAGE")"
 
 assert_contains() {
   local needle="$1"
@@ -24,11 +24,11 @@ assert_contains "port: 9200"
 assert_contains "nodeSelector:"
 assert_contains "kubernetes.io/arch: amd64"
 assert_contains "name: INFERENCE_HTTP_CLIENTS"
-assert_contains 'value: "512"'
+assert_contains 'value: "1024"'
 assert_contains 'cpu: "1"'
 assert_contains "memory: 2Gi"
 
-if ! grep -Fq 'value: "1024"' <<<"$override_manifest"; then
+if ! grep -Fq 'value: "2048"' <<<"$override_manifest"; then
   echo "expected INFERENCE_HTTP_CLIENTS env override to reach manifest" >&2
   exit 1
 fi
