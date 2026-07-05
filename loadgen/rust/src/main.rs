@@ -1,10 +1,11 @@
 use std::{
+    collections::BTreeMap,
     fs::File,
     future::Future,
     io::{BufWriter, Write},
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
@@ -15,7 +16,9 @@ use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use hdrhistogram::Histogram;
 use serde::Serialize;
-use stt_loadgen::protocol::{FRAME_INTERVAL, ServerMessage, StartMessage, frame_payload};
+use stt_loadgen::protocol::{
+    ErrorMessage, FRAME_INTERVAL, ServerMessage, StartMessage, frame_payload,
+};
 use tokio::{
     sync::mpsc,
     time::{Instant, sleep_until, timeout},
@@ -121,6 +124,76 @@ struct TimeoutOutput {
     session: u64,
 }
 
+const MAX_INFERENCE_ERROR_SAMPLES: usize = 5;
+
+#[derive(Debug, Default)]
+struct InferenceErrorDetails {
+    counts: BTreeMap<(String, String), u64>,
+    samples: Vec<InferenceErrorSample>,
+}
+
+impl InferenceErrorDetails {
+    fn record(&mut self, error: &ErrorMessage) {
+        let key = (error.stage.clone(), error.kind.clone());
+        *self.counts.entry(key).or_default() += 1;
+
+        let sample = InferenceErrorSample::from(error);
+        if self.samples.len() < MAX_INFERENCE_ERROR_SAMPLES && !self.samples.contains(&sample) {
+            self.samples.push(sample);
+        }
+    }
+
+    fn snapshot(&self) -> InferenceErrorSnapshot {
+        let counts = self
+            .counts
+            .iter()
+            .map(|((stage, kind), count)| InferenceErrorCount {
+                stage: stage.clone(),
+                kind: kind.clone(),
+                count: *count,
+            })
+            .collect();
+        InferenceErrorSnapshot {
+            counts,
+            samples: self.samples.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct InferenceErrorSnapshot {
+    counts: Vec<InferenceErrorCount>,
+    samples: Vec<InferenceErrorSample>,
+}
+
+#[derive(Debug, Serialize)]
+struct InferenceErrorCount {
+    stage: String,
+    kind: String,
+    count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+struct InferenceErrorSample {
+    stage: String,
+    kind: String,
+    message: String,
+    inference_status: Option<u16>,
+    retryable: bool,
+}
+
+impl From<&ErrorMessage> for InferenceErrorSample {
+    fn from(error: &ErrorMessage) -> Self {
+        Self {
+            stage: error.stage.clone(),
+            kind: error.kind.clone(),
+            message: error.message.clone(),
+            inference_status: error.inference_status,
+            retryable: error.retryable,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Sample {
     session_id: usize,
@@ -151,6 +224,8 @@ struct Output {
     partials: u64,
     protocol_errors: u64,
     inference_errors: u64,
+    inference_error_counts: Vec<InferenceErrorCount>,
+    inference_error_samples: Vec<InferenceErrorSample>,
     timeouts: TimeoutOutput,
     newest_frame_to_partial_latency: Percentiles,
     oldest_frame_to_partial_latency: Percentiles,
@@ -175,6 +250,7 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let protocol_errors = Arc::new(AtomicU64::new(0));
     let inference_errors = Arc::new(AtomicU64::new(0));
+    let inference_error_details = Arc::new(Mutex::new(InferenceErrorDetails::default()));
     let timeout_counters = Arc::new(TimeoutCounters::default());
     let ramp_up = Duration::from_secs(args.ramp_up_secs);
     let session_start_spread = Duration::from_millis(args.session_start_spread_ms);
@@ -200,6 +276,7 @@ async fn main() -> anyhow::Result<()> {
         let tx = sample_tx.clone();
         let errors = Arc::clone(&protocol_errors);
         let inference_err_counter = Arc::clone(&inference_errors);
+        let inference_err_details = Arc::clone(&inference_error_details);
         let counters = Arc::clone(&timeout_counters);
         let url = args.url.clone();
         let session_start_at = run_start
@@ -217,6 +294,7 @@ async fn main() -> anyhow::Result<()> {
                     timeouts,
                     counters.clone(),
                     inference_err_counter,
+                    inference_err_details,
                 ),
             )
             .await
@@ -271,6 +349,10 @@ async fn main() -> anyhow::Result<()> {
         writer.flush().context("flush samples csv")?;
     }
 
+    let inference_error_snapshot = inference_error_details
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .snapshot();
     let output = Output {
         url: args.url,
         service_name: args.service_name,
@@ -287,6 +369,8 @@ async fn main() -> anyhow::Result<()> {
         partials,
         protocol_errors: protocol_errors.load(Ordering::Relaxed),
         inference_errors: inference_errors.load(Ordering::Relaxed),
+        inference_error_counts: inference_error_snapshot.counts,
+        inference_error_samples: inference_error_snapshot.samples,
         timeouts: timeout_counters.snapshot(),
         newest_frame_to_partial_latency: percentiles(&newest_hist),
         oldest_frame_to_partial_latency: percentiles(&oldest_hist),
@@ -308,6 +392,7 @@ async fn run_session(
     timeouts: TimeoutConfig,
     timeout_counters: Arc<TimeoutCounters>,
     inference_errors: Arc<AtomicU64>,
+    inference_error_details: Arc<Mutex<InferenceErrorDetails>>,
 ) -> anyhow::Result<()> {
     sleep_until(session_start_at).await;
     let (ws, _) = timed(
@@ -372,6 +457,7 @@ async fn run_session(
                     &sent_times,
                     &sample_tx,
                     &inference_errors,
+                    &inference_error_details,
                 )
                     .await?
                     == InboundState::Closed
@@ -403,6 +489,7 @@ async fn run_session(
                     &sent_times,
                     &sample_tx,
                     &inference_errors,
+                    &inference_error_details,
                 )
                     .await?
                     == InboundState::Closed
@@ -459,6 +546,7 @@ async fn process_inbound(
     sent_times: &[Instant],
     sample_tx: &mpsc::Sender<Sample>,
     inference_errors: &Arc<AtomicU64>,
+    inference_error_details: &Arc<Mutex<InferenceErrorDetails>>,
 ) -> anyhow::Result<InboundState> {
     let message = match message {
         Some(Ok(Message::Close(_))) => return Ok(InboundState::Closed),
@@ -478,6 +566,10 @@ async fn process_inbound(
         ServerMessage::Partial(partial) => partial,
         ServerMessage::Error(error) => {
             inference_errors.fetch_add(1, Ordering::Relaxed);
+            inference_error_details
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .record(&error);
             warn!(
                 session_id,
                 stage = %error.stage,
@@ -632,6 +724,41 @@ mod tests {
             "sample_index,session_id,oldest_frame_seq,newest_frame_seq,frames,transcript,audio_bytes,newest_latency_ms,oldest_latency_ms,flush_lateness_ms,received_ms\n\
 0,7,2,4,3,now,1920,12.345,67.890,1.200,250.500\n"
         );
+    }
+
+    #[test]
+    fn records_inference_error_counts_and_samples() {
+        let mut details = InferenceErrorDetails::default();
+        let error = stt_loadgen::protocol::ErrorMessage {
+            stage: "inference_response_parse".to_string(),
+            kind: "http_4xx".to_string(),
+            message: "inference returned HTTP 404".to_string(),
+            oldest_frame_seq: 10,
+            newest_frame_seq: 12,
+            frames: 3,
+            audio_bytes: 1920,
+            oldest_age_ms: 1000.0,
+            newest_age_ms: 0.0,
+            flush_lateness_ms: 2.5,
+            inference_elapsed_ms: Some(74.0),
+            inflight_gateway_batches: 1,
+            gateway_buffer_frames: 0,
+            inference_status: Some(404),
+            retryable: false,
+        };
+
+        details.record(&error);
+        details.record(&error);
+
+        let snapshot = details.snapshot();
+        assert_eq!(snapshot.counts.len(), 1);
+        assert_eq!(snapshot.counts[0].stage, "inference_response_parse");
+        assert_eq!(snapshot.counts[0].kind, "http_4xx");
+        assert_eq!(snapshot.counts[0].count, 2);
+        assert_eq!(snapshot.samples.len(), 1);
+        assert_eq!(snapshot.samples[0].message, "inference returned HTTP 404");
+        assert_eq!(snapshot.samples[0].inference_status, Some(404));
+        assert!(!snapshot.samples[0].retryable);
     }
 
     #[test]
