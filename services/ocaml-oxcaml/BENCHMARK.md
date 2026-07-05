@@ -9,6 +9,7 @@
 | two 1-vCPU replicas | 3350 confirmed | replica fan-out |
 
 OxCaml reached the Go/Bun tier only after raw transport work: fresh inference connect per flush capped at 1050, persistent keep-alive moved it to 1750, and a zero-copy frame path moved it to 2075. A later performance pass with `OCAMLRUNPARAM=s=16777216` and a lighter session buffer moved the current 1-vCPU point to 2200; 2250 remains borderline/failing on newest-frame p50.
+Release builds now pass `-O3` to `ocamlopt`; a k3s validation run kept the same 2200 confirmed / 2250 fail bracket.
 
 ## Implementation Shape
 
@@ -30,6 +31,18 @@ All k3s runs use 1000 ms flush cadence, 10 s warmup, 45 s measured, 30 s ramp, a
 |---:|---|---:|---:|---:|
 | 2200 | pass, current chart point | 194 / 255 ms | 1175 / 1232 ms | 1.90 / 11.65 ms |
 | 2250 | borderline/fail, newest p50 | 198-206 / 263-273 ms | 1179-1188 / 1243-1253 ms | 1.89-1.90 / 11.78-12.30 ms |
+
+**2026-07-05 release `-O3` validation, 1 vCPU / 2 GiB** — rebuilt the regular Async OxCaml gateway with release `ocamlopt` flags `(:standard -O3)` and kept the accepted `OCAMLRUNPARAM=s=16777216` runtime setting. This did not move the capacity bracket: 2200 repeated cleanly, and 2250 still failed only newest-frame p50.
+
+| Sessions | Result | Newest p50 / p95 | Oldest p50 / p95 | Flush lateness p50 / p95 |
+|---:|---|---:|---:|---:|
+| 2200 | pass x2 | 194-195 / 252-254 ms | 1176 / 1232-1236 ms | 1.89-1.90 / 11.62-12.12 ms |
+| 2250 | fail, newest p50 | 202 / 261 ms | 1183 / 1242 ms | 1.89 / 11.86 ms |
+
+Artifacts:
+`results/oxcaml-onechange-20260705T010122Z/oxcaml-o3-r1-2200-2200.summary.json`,
+`results/oxcaml-onechange-20260705T010459Z/oxcaml-o3-r2-2200-2200.summary.json`,
+`results/oxcaml-onechange-20260705T010311Z/oxcaml-o3-r1-2250-2250.summary.json`.
 
 **1 vCPU / 2 GiB, tuned keep-alive + zero-copy** — bracketed 2075 confirmed ↔ 2100 borderline ↔ 2125 first solid fail. Artifacts were under `results/ocaml-oxcaml-1vcpu-2gib-20260516-tuned/`. The first solid failure is pure latency with zero protocol/inference/timeout errors.
 
