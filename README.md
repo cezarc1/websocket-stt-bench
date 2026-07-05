@@ -1,6 +1,6 @@
 # websocket-stt-bench
 
-## How many concurrent websocket audio-streaming sessions can modern async/actor runtimes sustain per vCPU?
+## How many concurrent websocket audio-streaming sessions can modern runtimes sustain per vCPU?
 ![Concurrent sessions vs. LOC at 1 vCPU](docs/loc-vs-capacity.png)
 
 This repo benchmarks streaming STT gateways behind one shared WebSocket protocol. Clients stream 16 kHz mono PCM at 20 ms / 640-byte frames; each gateway buffers per session, flushes every 1000 ms to a shared Rust inference simulator, and returns strict `partial` JSON messages.
