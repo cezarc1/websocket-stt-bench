@@ -66,9 +66,11 @@ capture_cpu_stat() {
 
 write_metadata() {
   local phase="$1"
-  local gateway_image gateway_env git_rev git_branch git_dirty_count
+  local gateway_image gateway_image_id gateway_env git_rev git_branch git_dirty_count
   gateway_image="$(kubectl_ns get deploy "$GATEWAY_DEPLOY" \
     -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+  gateway_image_id="$(kubectl_ns get pod -l "app=${GATEWAY_DEPLOY}" \
+    -o jsonpath='{.items[0].status.containerStatuses[0].imageID}' 2>/dev/null || true)"
   gateway_env="$(kubectl_ns get deploy "$GATEWAY_DEPLOY" \
     -o jsonpath='{range .spec.template.spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' 2>/dev/null || true)"
   git_rev="$(git -C "$ROOT" rev-parse --verify HEAD 2>/dev/null || true)"
@@ -97,6 +99,7 @@ write_metadata() {
   LOADGEN_MEM="${LOADGEN_MEM:-}" \
   TOP_DELAY_SECS="$TOP_DELAY_SECS" \
   GATEWAY_IMAGE="$gateway_image" \
+  GATEWAY_IMAGE_ID="$gateway_image_id" \
   GATEWAY_ENV="$gateway_env" \
   GIT_REV="$git_rev" \
   GIT_BRANCH="$git_branch" \
@@ -135,6 +138,7 @@ fields = [
     "LOADGEN_MEM",
     "TOP_DELAY_SECS",
     "GATEWAY_IMAGE",
+    "GATEWAY_IMAGE_ID",
     "GATEWAY_ENV",
     "GIT_REV",
     "GIT_BRANCH",
@@ -232,6 +236,7 @@ record = {
     "timeouts": summary.get("timeouts"),
     "cpu_delta": cpu.get("delta", {}),
     "gateway_image": metadata.get("gateway_image"),
+    "gateway_image_id": metadata.get("gateway_image_id"),
     "git_rev": metadata.get("git_rev"),
     "git_branch": metadata.get("git_branch"),
     "git_dirty_count": metadata.get("git_dirty_count"),

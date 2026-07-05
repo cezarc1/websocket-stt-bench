@@ -22,6 +22,7 @@ on:
       - "services/scala-pekko/**"
       - "services/cpp23-uwebsockets/**"
       - "services/ocaml-oxcaml/**"
+      - "services/ocaml-oxcaml-epoll/**"
       - "services/ocaml-websocket-async/**"
       - "versions.lock.toml"
   push:
@@ -47,9 +48,33 @@ on:
       - "services/scala-pekko/**"
       - "services/cpp23-uwebsockets/**"
       - "services/ocaml-oxcaml/**"
+      - "services/ocaml-oxcaml-epoll/**"
       - "services/ocaml-websocket-async/**"
       - "versions.lock.toml"
   workflow_dispatch:
+    inputs:
+      image:
+        description: "Image to build"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - inference-server
+          - rust-axum
+          - rust-sync
+          - elixir-phoenix
+          - python-fastapi-ft
+          - python-fastapi-gil
+          - typescript-bun
+          - go-nethttp
+          - java-helidon-nima
+          - scala-pekko
+          - cpp23-uwebsockets
+          - ocaml-oxcaml
+          - ocaml-oxcaml-epoll
+          - ocaml-websocket-async
+          - loadgen
 
 permissions:
   contents: read
@@ -57,6 +82,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
+  SELECTED_IMAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.image || 'all' }}
 
 jobs:
   build:
@@ -123,6 +149,13 @@ jobs:
               DEBIAN_RUNTIME_IMAGE=debian:12-slim
               OXCAML_SWITCH=5.2.0+ox
               OXCAML_REPO_COMMIT=main
+          - image: ocaml-oxcaml-epoll
+            dockerfile: docker/ocaml-oxcaml-epoll.Dockerfile
+            build_args: |
+              OPAM_BASE_IMAGE=ocaml/opam:debian-12-ocaml-5.2
+              DEBIAN_RUNTIME_IMAGE=debian:12-slim
+              OXCAML_SWITCH=5.2.0+ox
+              OXCAML_REPO_COMMIT=main
           - image: ocaml-websocket-async
             dockerfile: docker/ocaml-websocket-async.Dockerfile
             build_args: |
@@ -134,13 +167,15 @@ jobs:
 
     steps:
       - name: Checkout
+        if: env.SELECTED_IMAGE == 'all' || env.SELECTED_IMAGE == matrix.image
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
+        if: env.SELECTED_IMAGE == 'all' || env.SELECTED_IMAGE == matrix.image
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
+        if: (env.SELECTED_IMAGE == 'all' || env.SELECTED_IMAGE == matrix.image) && github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -148,6 +183,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Image metadata
+        if: env.SELECTED_IMAGE == 'all' || env.SELECTED_IMAGE == matrix.image
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -158,6 +194,7 @@ jobs:
             type=ref,event=tag
 
       - name: Build and optionally push
+        if: env.SELECTED_IMAGE == 'all' || env.SELECTED_IMAGE == matrix.image
         uses: docker/build-push-action@v6
         with:
           context: .
