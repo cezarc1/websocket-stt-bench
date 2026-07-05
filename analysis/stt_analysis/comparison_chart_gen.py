@@ -91,7 +91,7 @@ def render(out_path: Path) -> None:
     ax.set_axisbelow(True)
 
     ax.set_xlim(800, 4800)
-    ax.set_ylim(600, 1700)
+    ax.set_ylim(600, 1800)
 
     fig.text(
         0.99,
