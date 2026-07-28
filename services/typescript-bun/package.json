@@ -15,7 +15,7 @@
     "check": "bun run format:check && bun run lint && bun run typecheck && bun run audit && bun run test"
   },
   "dependencies": {
-    "valibot": "1.4.0"
+    "valibot": "1.4.2"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.15",
