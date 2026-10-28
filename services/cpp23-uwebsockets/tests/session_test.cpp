@@ -37,7 +37,7 @@ TEST_CASE("flush builds a partial and clears the buffer") {
     CHECK(fx.session->buffer_size() == 0);
     CHECK(fx.session->inflight());
 
-    fx.inference.requests.front().callback(stt::InferResponse{
+    fx.inference.requests.front().complete(stt::InferResponse{
         .rms = 1.5,
         .zero_crossings = 2,
         .checksum = 3,
@@ -85,6 +85,58 @@ TEST_CASE("buffer is bounded while inference is inflight") {
     CHECK(fx.session->dropped_frames() == 20);
 }
 
+TEST_CASE("flush after overflow sends the newest frames oldest first") {
+    const SessionFixture fx;
+
+    fx.session->on_text(R"({"type":"start"})");
+    constexpr std::size_t total = stt::MAX_BUFFERED_FRAMES + 20;
+    for (std::size_t i = 0; i < total; ++i) {
+        fx.session->on_binary(as_span(frame_of(static_cast<unsigned char>(i))));
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    fx.session->set_expected_next_flush(now);
+    fx.session->on_flush_tick(now);
+
+    REQUIRE(fx.inference.requests.size() == 1);
+    const auto& body = fx.inference.requests.front().body;
+    REQUIRE(body.size() == stt::MAX_BUFFERED_FRAMES * stt::FRAME_BYTES);
+    // Frames 0..19 were dropped; the body starts at frame 20 and ends at 169,
+    // each frame contiguous and in arrival order.
+    for (std::size_t f = 0; f < stt::MAX_BUFFERED_FRAMES; ++f) {
+        const auto expected = std::byte{static_cast<unsigned char>(f + 20)};
+        CHECK(body[f * stt::FRAME_BYTES] == expected);
+        CHECK(body[((f + 1) * stt::FRAME_BYTES) - 1] == expected);
+    }
+}
+
+TEST_CASE("body buffer capacity is reused across flushes") {
+    SessionFixture fx;
+
+    fx.session->on_text(R"({"type":"start"})");
+    auto now = std::chrono::steady_clock::now();
+    fx.session->set_expected_next_flush(now);
+
+    fx.session->on_binary(as_span(frame_of(0x01)));
+    fx.session->on_flush_tick(now);
+    REQUIRE(fx.inference.requests.size() == 1);
+    const std::byte* first = fx.inference.requests.front().body.data();
+    fx.inference.requests.front().complete(std::unexpected(stt::InferenceFailure{
+        .stage = stt::ErrorStage::InferenceRequest,
+        .kind = stt::ErrorKind::Timeout,
+        .detail = "timed out",
+        .status = std::nullopt,
+        .retryable = true,
+    }));
+
+    now += 1000ms;
+    fx.session->on_binary(as_span(frame_of(0x02)));
+    fx.session->on_flush_tick(now);
+    REQUIRE(fx.inference.requests.size() == 2);
+    // Same allocation: the first body came back with the completion.
+    CHECK(fx.inference.requests.back().body.data() == first);
+}
+
 TEST_CASE("inference failure surfaces as an error envelope on the wire") {
     SessionFixture fx;
 
@@ -96,7 +148,7 @@ TEST_CASE("inference failure surfaces as an error envelope on the wire") {
     fx.session->on_flush_tick(now);
 
     REQUIRE(fx.inference.requests.size() == 1);
-    fx.inference.requests.front().callback(std::unexpected(stt::InferenceFailure{
+    fx.inference.requests.front().complete(std::unexpected(stt::InferenceFailure{
         .stage = stt::ErrorStage::InferenceRequest,
         .kind = stt::ErrorKind::Timeout,
         .detail = "timed out",

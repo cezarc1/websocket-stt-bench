@@ -233,12 +233,13 @@ void submit_one(CURLM* multi, const std::string& url, std::chrono::milliseconds 
         state = idle.acquire();
     } catch (const std::runtime_error& ex) {
         request.on_complete(std::unexpected(InferenceFailure{
-            .stage = ErrorStage::InferenceRequest,
-            .kind = ErrorKind::ConnectionReset,
-            .detail = ex.what(),
-            .status = std::nullopt,
-            .retryable = true,
-        }));
+                                .stage = ErrorStage::InferenceRequest,
+                                .kind = ErrorKind::ConnectionReset,
+                                .detail = ex.what(),
+                                .status = std::nullopt,
+                                .retryable = true,
+                            }),
+                            std::move(request.body));
         return;
     }
 
@@ -249,7 +250,8 @@ void submit_one(CURLM* multi, const std::string& url, std::chrono::milliseconds 
 
     const CURLMcode add_code = curl_multi_add_handle(multi, easy);
     if (add_code != CURLM_OK) {
-        state->request.on_complete(std::unexpected(classify_multi(add_code)));
+        state->request.on_complete(std::unexpected(classify_multi(add_code)),
+                                   std::move(state->request.body));
         idle.recycle(std::move(state));
         return;
     }
@@ -278,7 +280,7 @@ void harvest_completions(CURLM* multi, ActiveList& active, IdlePool& idle) {
         active.erase(it);
         curl_multi_remove_handle(multi, easy);
         auto result = finish_easy(easy, *state, message->data.result);
-        state->request.on_complete(std::move(result));
+        state->request.on_complete(std::move(result), std::move(state->request.body));
         idle.recycle(std::move(state));
     }
 }
@@ -287,7 +289,7 @@ void fail_active(CURLM* multi, ActiveList& active, IdlePool& idle,
                  const InferenceFailure& failure) {
     for (auto& [easy, state] : active) {
         curl_multi_remove_handle(multi, easy);
-        state->request.on_complete(std::unexpected(failure));
+        state->request.on_complete(std::unexpected(failure), std::move(state->request.body));
         idle.recycle(std::move(state));
     }
     active.clear();
@@ -361,7 +363,7 @@ CurlInferenceClient::~CurlInferenceClient() {
 }
 
 void CurlInferenceClient::infer_async(std::vector<std::byte> body, int cpu_passes,
-                                      std::function<void(InferenceResult)> on_complete) {
+                                      InferenceCallback on_complete) {
     {
         const std::scoped_lock lock(queue_mutex_);
         queue_.push_back(Request{
