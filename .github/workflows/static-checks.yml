@@ -99,6 +99,9 @@ jobs:
         if: matrix.recipe == 'elixir-check'
         uses: erlef/setup-beam@v1
         with:
+          # Exact versions: "28.5" would otherwise resolve to the newest 28.5.x
+          # patch, and SttGateway.RuntimeVersions asserts the exact pin.
+          version-type: strict
           otp-version: "28.5"
           elixir-version: "1.19.5"
 
