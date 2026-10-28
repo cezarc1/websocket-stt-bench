@@ -55,7 +55,12 @@ func NewH2CClientPool(baseURL string, timeout time.Duration, clients int) *Clien
 	pool := make([]*http.Client, 0, clients)
 	for range clients {
 		pool = append(pool, &http.Client{
-			Transport: &http2.Transport{
+			// Deprecated in x/net v0.60.0; kept so the gateway still uses the same h2c
+			// client type (its internals did change with the x/net bump). Migrating to
+			// http.Transport{Protocols: UnencryptedHTTP2} would need a re-measure.
+			// NOTE: under go1.27+ x/net swaps this for a net/http wrapper unless built
+			// with -tags http2legacy, so a toolchain bump changes the measured path.
+			Transport: &http2.Transport{ //nolint:staticcheck // SA1019, see above
 				AllowHTTP: true,
 				DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
 					var dialer net.Dialer

@@ -7,7 +7,8 @@ ROOT="$(repo_root)"
 MODE="${1:-sync}"
 PYENV_NAME="$(version_value python pyenv)"
 PY_EXE="$(version_value python executable)"
-PYTHON_BIN="$(PYENV_VERSION="$PYENV_NAME" pyenv which "$PY_EXE")"
+# CI sets PYTHON_BIN (actions/setup-python); locally we resolve it via pyenv.
+PYTHON_BIN="${PYTHON_BIN:-$(PYENV_VERSION="$PYENV_NAME" pyenv which "$PY_EXE")}"
 UV_BIN="$ROOT/.tools/bin/uv"
 
 if [ "$MODE" = "lock" ]; then

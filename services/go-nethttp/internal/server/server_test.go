@@ -19,7 +19,7 @@ func (fakeRunner) Infer(context.Context, []byte, uint32) (protocol.Prediction, e
 func TestHealthResponse(t *testing.T) {
 	t.Parallel()
 
-	request := httptest.NewRequest(http.MethodGet, "/health", nil)
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health", nil)
 	response := httptest.NewRecorder()
 	New(config.Config{Port: 6000}, fakeRunner{}).Handler().ServeHTTP(response, request)
 

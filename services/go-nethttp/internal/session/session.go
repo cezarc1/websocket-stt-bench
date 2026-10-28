@@ -230,7 +230,7 @@ func (c *Core) processBatch(ctx context.Context, batch []protocol.Frame, flushLa
 		}
 		details := inference.AsDetails(err)
 		elapsedMS := durationMS(time.Now(), startedAt)
-		payload, marshalErr := protocol.MarshalErrorMessage(protocol.ErrorMessage{
+		payload, marshalErr := protocol.MarshalErrorMessage(&protocol.ErrorMessage{
 			Type:                   protocol.ErrorType,
 			Stage:                  details.Stage,
 			Kind:                   details.Kind,
@@ -251,7 +251,7 @@ func (c *Core) processBatch(ctx context.Context, batch []protocol.Frame, flushLa
 		return payload, marshalErr == nil
 	}
 
-	payload, err := protocol.MarshalPartialMessage(protocol.NewPartialMessage(
+	partial := protocol.NewPartialMessage(
 		prediction,
 		oldest.Seq,
 		newest.Seq,
@@ -259,7 +259,8 @@ func (c *Core) processBatch(ctx context.Context, batch []protocol.Frame, flushLa
 		c.config.CPUPasses,
 		c.config.ModelDelayMS,
 		flushLatenessMS,
-	))
+	)
+	payload, err := protocol.MarshalPartialMessage(&partial)
 	return payload, err == nil
 }
 

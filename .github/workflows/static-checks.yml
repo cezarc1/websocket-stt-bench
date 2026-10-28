@@ -1,0 +1,128 @@
+name: Static checks
+
+# Runs each language's `just <lang>-check` gate (format, lint, type check,
+# tests, dependency audit). images.yml only builds containers, so before this
+# workflow nothing enforced these gates in CI.
+#
+# OCaml is not in the matrix: both OxCaml and stock switches are built from
+# source (15+ min cold). Its Dockerfiles run `dune runtest` in images.yml.
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: static-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: ${{ matrix.recipe }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - recipe: python-check
+            python: "3.14.4t"
+            lock: services/python-fastapi/uv.lock
+            cache: ~/.cache/uv
+          - recipe: analysis-check
+            python: "3.14.4"
+            lock: analysis/uv.lock
+            cache: ~/.cache/uv
+          - recipe: ts-check
+            lock: services/typescript-bun/bun.lock
+            cache: ~/.bun/install/cache
+          - recipe: go-check
+            lock: services/go-nethttp/go.sum
+            cache: |
+              ~/go/pkg/mod
+              ~/.cache/go-build
+          - recipe: rust-check
+            lock: Cargo.lock
+            cache: |
+              ~/.cargo/registry
+              ~/.cargo/git
+              target
+          - recipe: elixir-check
+            lock: services/elixir-phoenix/mix.lock
+            cache: |
+              services/elixir-phoenix/deps
+              services/elixir-phoenix/_build
+          - recipe: java-check
+            lock: services/java-helidon-nima/pom.xml
+            cache: ~/.m2/repository
+          - recipe: scala-check
+            lock: services/scala-pekko/build.sbt
+            cache: |
+              ~/.cache/coursier
+              ~/.ivy2/cache
+              ~/.sbt
+          - recipe: cpp-check
+            lock: services/cpp23-uwebsockets/MODULE.bazel.lock
+            cache: ~/.cache/bazel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up just
+        uses: extractions/setup-just@v2
+        with:
+          just-version: "1.40.0"
+
+      # The repo pins Python as system-only (no uv downloads); locally it comes
+      # from pyenv. py-sync.sh honours PYTHON_BIN; analysis finds it on PATH.
+      - name: Set up Python
+        id: python
+        if: matrix.python != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Point py-sync at the CI interpreter
+        if: matrix.recipe == 'python-check'
+        run: echo "PYTHON_BIN=${{ steps.python.outputs.python-path }}" >> "$GITHUB_ENV"
+
+      - name: Install pinned cargo plugins
+        if: matrix.recipe == 'rust-check'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.133,cargo-deny@0.19.4
+
+      - name: Set up Elixir/OTP
+        if: matrix.recipe == 'elixir-check'
+        uses: erlef/setup-beam@v1
+        with:
+          # Exact versions: "28.5" would otherwise resolve to the newest 28.5.x
+          # patch, and SttGateway.RuntimeVersions asserts the exact pin.
+          version-type: strict
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
+
+      # The gateway links the system libcurl (third_party/BUILD.bazel).
+      - name: Install libcurl headers
+        if: matrix.recipe == 'cpp-check'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
+
+      - name: Cache pinned toolchains
+        uses: actions/cache@v4
+        with:
+          path: .tools
+          key: tools-${{ matrix.recipe }}-${{ runner.os }}-${{ hashFiles('versions.lock.toml') }}
+
+      - name: Cache dependencies and build outputs
+        uses: actions/cache@v4
+        with:
+          path: ${{ matrix.cache }}
+          key: deps-${{ matrix.recipe }}-${{ runner.os }}-${{ hashFiles(matrix.lock) }}
+          restore-keys: |
+            deps-${{ matrix.recipe }}-${{ runner.os }}-
+
+      - name: just ${{ matrix.recipe }}
+        run: just ${{ matrix.recipe }}
