@@ -17,7 +17,17 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true
+      "recommended": true,
+      "performance": {
+        "noNamespaceImport": "off",
+        "noAwaitInLoops": "error",
+        "useTopLevelRegex": "error",
+        "noAccumulatingSpread": "error",
+        "noDelete": "error",
+        "noBarrelFile": "error",
+        "noReExportAll": "error",
+        "noDynamicNamespaceImportAccess": "error"
+      }
     }
   }
 }

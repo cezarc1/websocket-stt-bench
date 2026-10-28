@@ -1,0 +1,6 @@
+(library
+ (name stt_ocaml_oxcaml_epoll)
+ (public_name stt_ocaml_oxcaml_epoll)
+ (libraries yojson unix)
+ (flags
+  (:standard -w +a-40-42-66-70 -strict-sequence)))

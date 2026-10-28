@@ -18,7 +18,7 @@ let write_simple writer ~status_code ~status_text ~body =
   Writer.flushed writer
 ;;
 
-let serve ~config ~inference _addr reader writer =
+let serve ~config ~inference ~diagnostics _addr reader writer =
   match%bind Http1.read_request reader with
   | None -> return ()
   | Some req ->
@@ -33,14 +33,20 @@ let serve ~config ~inference _addr reader writer =
             ~body:"invalid websocket upgrade"
         | Some ws_key ->
           let%bind () = Websocket_handshake.write_upgrade_response writer ~ws_key in
-          Websocket_connection.run ~config ~inference ~reader ~writer)
+          Websocket_connection.run ~config ~inference ~diagnostics ~reader ~writer)
      | "/health" -> write_simple writer ~status_code:200 ~status_text:"OK" ~body:"ok"
      | _ ->
        write_simple writer ~status_code:404 ~status_text:"Not Found" ~body:"not found")
 ;;
 
 let start (config : Config.t) =
-  let inference = Inference.create config in
+  let diag_config = Diagnostics.Config.from_env () in
+  let diagnostics = Diagnostics.create diag_config in
+  if Diagnostics.enabled diagnostics
+  then don't_wait_for (Diagnostics.run_periodic diagnostics);
+  if Diagnostics.tracing_enabled diagnostics
+  then don't_wait_for (Diagnostics.run_trace_periodic diagnostics);
+  let inference = Inference.create ~diagnostics config in
   Log.Global.info "stt-ocaml-oxcaml starting: %s" (Config.to_string_hum config);
   let where_to_listen = Tcp.Where_to_listen.of_port config.port in
   let%bind _server =
@@ -55,7 +61,7 @@ let start (config : Config.t) =
       ~max_accepts_per_batch:64
       ~on_handler_error:`Ignore
       where_to_listen
-      (fun addr reader writer -> serve ~config ~inference addr reader writer)
+      (fun addr reader writer -> serve ~config ~inference ~diagnostics addr reader writer)
   in
   Deferred.never ()
 ;;

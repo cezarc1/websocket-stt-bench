@@ -160,12 +160,15 @@ func NewPartialMessage(
 	}
 }
 
-func MarshalPartialMessage(message PartialMessage) ([]byte, error) {
+// MarshalPartialMessage rounds message in place, then encodes it. Taking a
+// pointer avoids copying the 128-byte struct on every partial.
+func MarshalPartialMessage(message *PartialMessage) ([]byte, error) {
 	message.FlushLatenessMS = RoundMillis(message.FlushLatenessMS)
 	return json.Marshal(message)
 }
 
-func MarshalErrorMessage(message ErrorMessage) ([]byte, error) {
+// MarshalErrorMessage rounds message in place, then encodes it.
+func MarshalErrorMessage(message *ErrorMessage) ([]byte, error) {
 	message.OldestAgeMS = RoundMillis(message.OldestAgeMS)
 	message.NewestAgeMS = RoundMillis(message.NewestAgeMS)
 	message.FlushLatenessMS = RoundMillis(message.FlushLatenessMS)

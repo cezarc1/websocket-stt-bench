@@ -1,29 +1,6 @@
 open! Core
 open! Async
 
-type t =
-  { header_prefix : string
-  ; where : Tcp.Where_to_connect.inet
-  }
-
-(* Everything in the request head except [Content-Length] is constant for the life of the
-   process, so build it once instead of per flush. *)
-let create (config : Config.t) =
-  { header_prefix =
-      sprintf
-        "POST /infer HTTP/1.1\r\n\
-         Host: %s:%d\r\n\
-         x-cpu-passes: %d\r\n\
-         Content-Type: application/octet-stream\r\n"
-        config.inference_host
-        config.inference_port
-        config.cpu_passes
-  ; where =
-      Tcp.Where_to_connect.of_host_and_port
-        { Host_and_port.host = config.inference_host; port = config.inference_port }
-  }
-;;
-
 (* Matches the Rust gateway's 2 s request deadline. The inference simulator's p99 is ~300
    ms (75 ms model delay + batch wait + long tail), so 2 s is generous headroom while
    still bounding a stall. *)
@@ -40,6 +17,31 @@ type conn =
   }
 
 let create_conn () = { rw = None; epoch = 0 }
+
+type t =
+  { header_prefix : string
+  ; where : Tcp.Where_to_connect.inet
+  ; diagnostics : Diagnostics.t
+  }
+
+(* Everything in the request head except [Content-Length] is constant for the life of the
+   process, so build it once instead of per flush. *)
+let create ?(diagnostics = Diagnostics.disabled) (config : Config.t) =
+  { header_prefix =
+      sprintf
+        "POST /infer HTTP/1.1\r\n\
+         Host: %s:%d\r\n\
+         x-cpu-passes: %d\r\n\
+         Content-Type: application/octet-stream\r\n"
+        config.inference_host
+        config.inference_port
+        config.cpu_passes
+  ; where =
+      Tcp.Where_to_connect.of_host_and_port
+        { Host_and_port.host = config.inference_host; port = config.inference_port }
+  ; diagnostics
+  }
+;;
 
 let close_rw (reader, writer) =
   let%bind () = Writer.close writer in
@@ -131,22 +133,102 @@ let write_request t writer ~body ~body_len =
 
 (* One request/response on an established [(reader, writer)]. [`Retry] means the socket
    looked dead (EOF before/within the response) so the caller may redial once. *)
-let exchange t (reader, writer) ~body ~body_len =
+let exchange t (reader, writer) ~trace_tid ~body ~body_len =
+  let write_timing = Diagnostics.start_timing t.diagnostics Diagnostics.Inference_write in
   match%bind
     Monitor.try_with ~here:[%here] (fun () -> write_request t writer ~body ~body_len)
   with
-  | Error _ -> return `Retry
+  | Error _ ->
+    Diagnostics.finish_timing
+      t.diagnostics
+      Diagnostics.Inference_write
+      ~trace_tid
+      ~trace_args:
+        [ Diagnostics.Int_arg ("bytes", body_len); Diagnostics.Bool_arg ("retry", true) ]
+      write_timing;
+    return `Retry
   | Ok () ->
+    Diagnostics.finish_timing
+      t.diagnostics
+      Diagnostics.Inference_write
+      ~trace_tid
+      ~trace_args:
+        [ Diagnostics.Int_arg ("bytes", body_len); Diagnostics.Bool_arg ("retry", false) ]
+      write_timing;
+    let head_timing =
+      Diagnostics.start_timing t.diagnostics Diagnostics.Inference_read_head
+    in
     (match%bind read_response_head reader with
-     | `Closed -> return `Retry
-     | `Bad_status line -> return (`Done (parse_err (sprintf "bad status line: %s" line)))
+     | `Closed ->
+       Diagnostics.finish_timing
+         t.diagnostics
+         Diagnostics.Inference_read_head
+         ~trace_tid
+         ~trace_args:[ Diagnostics.String_arg ("result", "closed") ]
+         head_timing;
+       return `Retry
+     | `Bad_status line ->
+       Diagnostics.finish_timing
+         t.diagnostics
+         Diagnostics.Inference_read_head
+         ~trace_tid
+         ~trace_args:[ Diagnostics.String_arg ("result", "bad_status") ]
+         head_timing;
+       return (`Done (parse_err (sprintf "bad status line: %s" line)))
      | `Chunked_unsupported ->
+       Diagnostics.finish_timing
+         t.diagnostics
+         Diagnostics.Inference_read_head
+         ~trace_tid
+         ~trace_args:[ Diagnostics.String_arg ("result", "chunked_unsupported") ]
+         head_timing;
        return (`Done (parse_err "chunked transfer-encoding not supported"))
-     | `No_length -> return (`Done (parse_err "missing Content-Length"))
+     | `No_length ->
+       Diagnostics.finish_timing
+         t.diagnostics
+         Diagnostics.Inference_read_head
+         ~trace_tid
+         ~trace_args:[ Diagnostics.String_arg ("result", "no_length") ]
+         head_timing;
+       return (`Done (parse_err "missing Content-Length"))
      | `Ok (status, len) ->
+       Diagnostics.finish_timing
+         t.diagnostics
+         Diagnostics.Inference_read_head
+         ~trace_tid
+         ~trace_args:
+           [ Diagnostics.String_arg ("result", "ok")
+           ; Diagnostics.Int_arg ("status", status)
+           ; Diagnostics.Int_arg ("bytes", len)
+           ]
+         head_timing;
+       let body_timing =
+         Diagnostics.start_timing t.diagnostics Diagnostics.Inference_read_body
+       in
        (match%bind read_exact reader ~len with
-        | None -> return `Retry
+        | None ->
+          Diagnostics.finish_timing
+            t.diagnostics
+            Diagnostics.Inference_read_body
+            ~trace_tid
+            ~trace_args:
+              [ Diagnostics.Int_arg ("status", status)
+              ; Diagnostics.Int_arg ("bytes", len)
+              ; Diagnostics.Bool_arg ("retry", true)
+              ]
+            body_timing;
+          return `Retry
         | Some resp_body ->
+          Diagnostics.finish_timing
+            t.diagnostics
+            Diagnostics.Inference_read_body
+            ~trace_tid
+            ~trace_args:
+              [ Diagnostics.Int_arg ("status", status)
+              ; Diagnostics.Int_arg ("bytes", len)
+              ; Diagnostics.Bool_arg ("retry", false)
+              ]
+            body_timing;
           if status <> 200
           then
             return
@@ -157,13 +239,27 @@ let exchange t (reader, writer) ~body ~body_len =
                    ~message:(sprintf "inference returned HTTP %d" status)
                    ~status:(Some status)))
           else (
-            match Yojson.Safe.from_string resp_body with
-            | exception exn ->
-              return (`Done (parse_err (sprintf "yojson: %s" (Exn.to_string exn))))
-            | json ->
-              (match Protocol.Infer_response.of_yojson json with
-               | Ok infer -> return (`Done (Ok infer))
-               | Error msg -> return (`Done (parse_err msg))))))
+            let parse_timing =
+              Diagnostics.start_timing t.diagnostics Diagnostics.Response_parse
+            in
+            let result =
+              match Yojson.Safe.from_string resp_body with
+              | exception exn -> parse_err (sprintf "yojson: %s" (Exn.to_string exn))
+              | json ->
+                (match Protocol.Infer_response.of_yojson json with
+                 | Ok infer -> Ok infer
+                 | Error msg -> parse_err msg)
+            in
+            Diagnostics.finish_timing
+              t.diagnostics
+              Diagnostics.Response_parse
+              ~trace_tid
+              ~trace_args:
+                [ Diagnostics.Int_arg ("status", status)
+                ; Diagnostics.Int_arg ("bytes", len)
+                ]
+              parse_timing;
+            return (`Done result))))
 ;;
 
 let dial t = Tcp.connect t.where >>| fun (_sock, r, w) -> r, w
@@ -175,7 +271,7 @@ let dial t = Tcp.connect t.where >>| fun (_sock, r, w) -> r, w
    and bails. The next [send] cannot begin until the owning [send] returns (Mvar/token
    discipline in {!Session}), so once superseded the orphan can never reach a live epoch
    again — there is no later connection for it to clobber. *)
-let do_request t conn ~epoch ~body ~body_len =
+let do_request t conn ~epoch ~trace_tid ~body ~body_len =
   let current () = conn.epoch = epoch in
   (* Publish a freshly dialed socket for reuse only if this attempt still owns [conn]; the
      [current ()] check and the [conn.rw] write are adjacent with no intervening bind —
@@ -207,20 +303,20 @@ let do_request t conn ~epoch ~body ~body_len =
   match%bind acquire () with
   | `Abandoned -> return (connection_reset "inference connection abandoned")
   | `Use rw ->
-    (match%bind exchange t rw ~body ~body_len with
+    (match%bind exchange t rw ~trace_tid ~body ~body_len with
      | `Done result -> return result
      | `Retry ->
        (match%bind redial () with
         | `Abandoned -> return (connection_reset "inference connection abandoned")
         | `Use rw ->
-          (match%bind exchange t rw ~body ~body_len with
+          (match%bind exchange t rw ~trace_tid ~body ~body_len with
            | `Done result -> return result
            | `Retry ->
              let%bind () = if current () then close_conn conn else return () in
              return (connection_reset "inference connection failed after redial"))))
 ;;
 
-let send t ~conn ~capability ~body ~body_len =
+let send_http1 ?(trace_tid = 0) t ~conn ~capability ~body ~body_len =
   let token = Inflight_capability.consume capability in
   let epoch = conn.epoch in
   let abandon kind message =
@@ -231,7 +327,9 @@ let send t ~conn ~capability ~body ~body_len =
   in
   match%bind
     Monitor.try_with ~here:[%here] (fun () ->
-      Clock_ns.with_timeout request_timeout (do_request t conn ~epoch ~body ~body_len))
+      Clock_ns.with_timeout
+        request_timeout
+        (do_request t conn ~epoch ~trace_tid ~body ~body_len))
   with
   | Ok (`Result result) -> return { result; token }
   | Ok `Timeout ->
@@ -239,4 +337,8 @@ let send t ~conn ~capability ~body ~body_len =
       Kind.Timeout
       (sprintf "inference exceeded %.0fms" (Time_ns.Span.to_ms request_timeout))
   | Error exn -> abandon Kind.Connection_reset (Exn.to_string exn)
+;;
+
+let send ?(trace_tid = 0) t ~conn ~capability ~body ~body_len =
+  send_http1 ~trace_tid t ~conn ~capability ~body ~body_len
 ;;

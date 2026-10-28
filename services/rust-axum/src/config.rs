@@ -24,7 +24,7 @@ pub(crate) const REASON_BAD_FRAME_SIZE: &str = "expected 640 byte PCM frame";
 
 // Keep these in sync with the pinned versions in workspace Cargo.toml.
 pub(crate) const AXUM_VERSION: &str = "0.8.9";
-pub(crate) const TOKIO_VERSION: &str = "1.52.1";
+pub(crate) const TOKIO_VERSION: &str = "1.53.3";
 pub(crate) const REQWEST_VERSION: &str = "0.12.27";
 
 pub(crate) fn env_parsed<T: std::str::FromStr>(name: &str, default: T) -> T {

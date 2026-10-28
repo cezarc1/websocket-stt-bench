@@ -6,8 +6,8 @@
 # Cold-start cost on a typical workstation:
 # - OxCaml switch creation from source: 10-20 minutes (compiles the
 #   modified OCaml compiler).
-# - Package installs (ocamlformat, merlin, parallel, async_websocket,
-#   h2, yojson, ppx_jane, ppx_expect, alcotest, ...): another 5-10
+# - Package installs (ocamlformat, merlin, async, yojson, ppx_jane,
+#   alcotest, ...): another 5-10
 #   minutes the first time.
 #
 # After that, the switch is cached under $OPAMROOT.
@@ -59,7 +59,7 @@ declare -a packages=(
   core
   core_unix
   async
-  parallel
+  chrome-trace
   yojson
   ppx_jane
   alcotest

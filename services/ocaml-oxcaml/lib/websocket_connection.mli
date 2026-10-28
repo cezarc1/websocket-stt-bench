@@ -10,6 +10,7 @@ open! Async
 val run
   :  config:Config.t
   -> inference:Inference.t
+  -> diagnostics:Diagnostics.t
   -> reader:Reader.t
   -> writer:Writer.t
   -> unit Async.Deferred.t

@@ -261,7 +261,7 @@ async fn send_infer(
         .body(payload.to_vec())
         .send()
         .await
-        .map_err(classify_reqwest_error)?;
+        .map_err(|e| classify_reqwest_error(&e))?;
 
     if !response.status().is_success() {
         return Err(BenchError::new(
@@ -272,11 +272,11 @@ async fn send_infer(
     response
         .bytes()
         .await
-        .map_err(classify_reqwest_error)
+        .map_err(|e| classify_reqwest_error(&e))
         .map(|_| started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64)
 }
 
-fn classify_reqwest_error(error: reqwest::Error) -> BenchError {
+fn classify_reqwest_error(error: &reqwest::Error) -> BenchError {
     let message = format!("{error:?}");
     if error.is_timeout() {
         BenchError::new(BenchErrorKind::Timeout, message)

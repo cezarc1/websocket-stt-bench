@@ -175,7 +175,7 @@ impl Slot {
     fn drive(&mut self, writable: bool) -> Step {
         match self.run(writable) {
             Ok(step) => step,
-            Err(e) => self.retry_or_fail(e),
+            Err(e) => self.retry_or_fail(&e),
         }
     }
 
@@ -268,7 +268,7 @@ impl Slot {
         }
     }
 
-    fn retry_or_fail(&mut self, e: io::Error) -> Step {
+    fn retry_or_fail(&mut self, e: &io::Error) -> Step {
         if !self.retried && self.sock.is_some() {
             self.retried = true;
             self.state = State::Sending { off: 0 };
@@ -469,6 +469,10 @@ pub fn spawn(
 /// if thread A dies, `done_tx.send` errors are dropped here and B parks
 /// harmlessly until the process is killed — there is intentionally no
 /// cross-thread supervision.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "worker thread body: called once and owns these for the thread's lifetime"
+)]
 fn run(
     mut poll: Poll,
     addr: SocketAddr,

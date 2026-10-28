@@ -24,17 +24,18 @@ import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 
 # (name, sessions at 1 vCPU, application LOC, label dx_pts, dy_pts, horizontal alignment)
-# For most runtimes, application LOC equals raw production LOC. The two OCaml
-# raw-transport variants exclude the generic first-party
-# WebSocket/HTTP/SHA-1/base64 shim so package code is treated consistently.
+# For most runtimes, application LOC equals raw production LOC. The OCaml
+# raw-transport variants exclude the generic first-party WebSocket/HTTP/SHA-1/
+# base64/masking shim so package code is treated consistently.
 RUNTIMES: list[tuple[str, int, int, int, int, str]] = [
     ("Rust / mio", 4400, 1221, 10, -16, "left"),
     ("C++23 / uWebSockets", 4350, 1551, -10, -14, "right"),
     ("Async Rust / Tokio", 3475, 696, 10, 10, "left"),
     ("Java / Helidon Nima", 2625, 917, 10, 10, "left"),
+    ("oxcaml-epoll", 2900, 1680, -10, 10, "right"),
     ("TypeScript / Bun", 2550, 734, 10, -14, "left"),
     ("Go / net/http", 2500, 893, 10, -14, "left"),
-    ("OxCaml", 2075, 879, 10, 10, "left"),
+    ("OxCaml", 2200, 879, 10, 10, "left"),
     ("OCaml", 1930, 850, 10, -14, "left"),
     ("Scala / Pekko", 1400, 726, 10, -14, "left"),
     ("Elixir / Phoenix", 1250, 784, 10, 10, "left"),
@@ -90,7 +91,7 @@ def render(out_path: Path) -> None:
     ax.set_axisbelow(True)
 
     ax.set_xlim(800, 4800)
-    ax.set_ylim(600, 1700)
+    ax.set_ylim(600, 1800)
 
     fig.text(
         0.99,

@@ -1,0 +1,19 @@
+(lang dune 3.21)
+(name stt_ocaml_oxcaml_epoll)
+
+(generate_opam_files true)
+
+(formatting
+ (enabled_for ocaml))
+
+(package
+ (name stt_ocaml_oxcaml_epoll)
+ (synopsis "No-Async OxCaml epoll STT WebSocket gateway")
+ (description
+  "A Linux-only no-Async OxCaml gateway for websocket-stt-bench, using epoll/eventfd C stubs and explicit WebSocket/inference state machines.")
+ (depends
+  (ocaml (= 5.2.0+ox))
+  dune
+  unix
+  yojson
+  alcotest))

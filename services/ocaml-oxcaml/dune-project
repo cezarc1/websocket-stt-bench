@@ -18,7 +18,7 @@
   core
   core_unix
   async
-  parallel
+  chrome-trace
   yojson
   ppx_jane
   alcotest))

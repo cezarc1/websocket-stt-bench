@@ -50,7 +50,7 @@ export function startServer(config: AppConfig = loadConfig()): Bun.Server<WebSoc
   });
 
   console.info(
-    "runtime_versions runtime=typescript-bun bun=%s valibot=1.4.0 inference_url=%s flush_interval_ms=%d",
+    "runtime_versions runtime=typescript-bun bun=%s valibot=1.4.2 inference_url=%s flush_interval_ms=%d",
     Bun.version,
     config.inferenceUrl,
     config.flushIntervalMs,

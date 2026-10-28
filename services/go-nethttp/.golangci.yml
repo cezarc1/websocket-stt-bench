@@ -1,0 +1,31 @@
+version: "2"
+
+# golangci-lint's defaults (errcheck, govet, ineffassign, staticcheck, unused)
+# plus the perf-oriented linters. Allocation/escape costs on the hot path are
+# NOT visible to any linter here; review them with
+# `go build -gcflags=-m ./internal/...` and a profile from a bench point.
+linters:
+  enable:
+    - bodyclose
+    - copyloopvar
+    - gocritic
+    - intrange
+    - mirror
+    - noctx
+    - perfsprint
+    - prealloc
+    - unconvert
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+    staticcheck:
+      checks:
+        - all
+        # Style-only: package/exported-identifier doc comments.
+        - -ST1000
+        - -ST1003
+        - -ST1020
+        - -ST1021
+        - -ST1022

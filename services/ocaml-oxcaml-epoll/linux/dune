@@ -1,0 +1,10 @@
+(library
+ (name stt_ocaml_oxcaml_epoll_linux)
+ (libraries unix yojson stt_ocaml_oxcaml_epoll)
+ (enabled_if
+  (= %{system} linux))
+ (foreign_stubs
+  (language c)
+  (names epoll_stubs))
+ (flags
+  (:standard -w +a-40-41-42-66-70 -strict-sequence)))
