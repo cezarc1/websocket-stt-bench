@@ -1,3 +1,6 @@
+// cert-err33-c: on macOS arm64 doctest's CHECK expands DOCTEST_BREAK_INTO_DEBUGGER
+// to an unchecked `raise(SIGTRAP)`; the hit is in the macro, not in this file.
+// NOLINTBEGIN(cert-err33-c)
 #include "doctest/doctest.h"
 
 #include <chrono>
@@ -53,7 +56,7 @@ TEST_CASE("flush builds a partial and clears the buffer") {
 }
 
 TEST_CASE("second flush while inflight is a no-op") {
-    SessionFixture fx;
+    const SessionFixture fx;
 
     fx.session->on_text(R"({"type":"start"})");
     fx.session->on_binary(as_span(frame_of(0x01)));
@@ -71,7 +74,7 @@ TEST_CASE("second flush while inflight is a no-op") {
 }
 
 TEST_CASE("buffer is bounded while inference is inflight") {
-    SessionFixture fx;
+    const SessionFixture fx;
 
     fx.session->on_text(R"({"type":"start"})");
     for (std::size_t i = 0; i < stt::MAX_BUFFERED_FRAMES + 20; ++i) {
@@ -110,7 +113,7 @@ TEST_CASE("inference failure surfaces as an error envelope on the wire") {
 }
 
 TEST_CASE("text after start closes with 1002") {
-    SessionFixture fx;
+    const SessionFixture fx;
 
     fx.session->on_text(R"({"type":"start"})");
     fx.session->on_text(R"({"type":"start"})");
@@ -120,7 +123,7 @@ TEST_CASE("text after start closes with 1002") {
 }
 
 TEST_CASE("non-640-byte binary closes with 1003") {
-    SessionFixture fx;
+    const SessionFixture fx;
 
     fx.session->on_text(R"({"type":"start"})");
     const std::vector<std::byte> tiny(123);
@@ -129,3 +132,4 @@ TEST_CASE("non-640-byte binary closes with 1003") {
     CHECK(fx.sink.close_code == stt::CLOSE_UNSUPPORTED_DATA);
     CHECK(fx.sink.close_reason == stt::REASON_BAD_FRAME_SIZE);
 }
+// NOLINTEND(cert-err33-c)

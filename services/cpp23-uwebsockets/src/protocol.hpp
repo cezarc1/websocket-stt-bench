@@ -134,7 +134,9 @@ struct PartialContext {
 
 // Field order in each `object(...)` block below controls wire output order and
 // must match the Rust/Go/Java/Scala gateways exactly — the load generator
-// expects identical shape from every runtime.
+// expects identical shape from every runtime. Kept one key/member pair per line
+// for review, so clang-format is off for these tables.
+// clang-format off
 template <>
 struct glz::meta<stt::StartMessage> {
     using T = stt::StartMessage;
@@ -194,3 +196,4 @@ struct glz::meta<stt::ErrorMessage> {
         "inference_status", &T::inference_status,
         "retryable", &T::retryable);
 };
+// clang-format on

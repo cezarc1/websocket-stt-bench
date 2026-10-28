@@ -1,13 +1,30 @@
 ---
-# Modern C++ lint. We enable the four big families (bugprone, performance,
-# modernize, readability) and pull in cppcoreguidelines selectively — the
-# whole cppcoreguidelines-* set is too aggressive (it complains about
-# pointer arithmetic inside std::span and about union usage in glaze).
+# Modern C++ lint, run by `bazel build --config=tidy //...` (see .bazelrc).
+# We enable the four big families (bugprone, performance, modernize,
+# readability) plus the Clang Static Analyzer, and pull in cppcoreguidelines
+# selectively — the whole cppcoreguidelines-* set is too aggressive (it
+# complains about pointer arithmetic inside std::span and about union usage in
+# glaze).
+#
+# Narrow opt-outs (YAML can't carry comments inside the folded list):
+# - clang-analyzer-optin.core.EnumCastOutOfRange: only fires inside
+#   uWebSockets' TopicTree.h, which ORs flag bits into a plain enum
+#   (`(IteratorFlags)(flags | FIRST)`) — the standard flag-enum idiom, a
+#   false positive. Our own enums are `enum class` and never bit-combined.
+# - clang-diagnostic-pragma-once-outside-header: the aspect also lints every
+#   header as its own translation unit (which proves headers are
+#   self-contained); `#pragma once` in a main file is meaningless there.
+# - IgnoreMacros below: doctest's CHECK/CHECK_THROWS_AS expand to branches,
+#   try/catch and `std::decay<>::type`, which would otherwise count against
+#   every TEST_CASE's cognitive complexity and modernize-type-traits.
 Checks: >
   bugprone-*,
   -bugprone-easily-swappable-parameters,
   cert-*,
   -cert-err58-cpp,
+  clang-analyzer-*,
+  -clang-analyzer-optin.core.EnumCastOutOfRange,
+  -clang-diagnostic-pragma-once-outside-header,
   cppcoreguidelines-avoid-non-const-global-variables,
   cppcoreguidelines-init-variables,
   cppcoreguidelines-narrowing-conversions,
@@ -27,6 +44,14 @@ Checks: >
   -readability-identifier-length,
   -readability-magic-numbers
 
+CheckOptions:
+  readability-function-cognitive-complexity.IgnoreMacros: true
+  modernize-type-traits.IgnoreMacros: true
+
 WarningsAsErrors: '*'
-HeaderFilterRegex: '^.*/services/cpp23-uwebsockets/src/.*$'
+# Only report diagnostics in our own src/ and tests/. Under Bazel the paths
+# are sandbox-absolute (`.../execroot/_main/src/...`); outside Bazel (clangd,
+# compile_commands) they are repo paths. Third-party headers live under
+# `external/...` and never match.
+HeaderFilterRegex: '/(execroot/_main|services/cpp23-uwebsockets)/(src|tests)/'
 FormatStyle: file

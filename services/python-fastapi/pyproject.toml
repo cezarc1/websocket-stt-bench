@@ -48,6 +48,7 @@ extend-select = [
     "LOG",    # flake8-logging
     "G",      # flake8-logging-format
     "FA",     # flake8-future-annotations
+    "FURB",   # refurb (modernisation; incl. some perf-flavoured idioms)
 ]
 
 [tool.ruff.lint.per-file-ignores]

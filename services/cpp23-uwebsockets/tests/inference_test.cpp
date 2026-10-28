@@ -1,3 +1,6 @@
+// cert-err33-c: on macOS arm64 doctest's CHECK expands DOCTEST_BREAK_INTO_DEBUGGER
+// to an unchecked `raise(SIGTRAP)`; the hit is in the macro, not in this file.
+// NOLINTBEGIN(cert-err33-c)
 #include "inference.hpp"
 
 #include "doctest/doctest.h"
@@ -21,3 +24,4 @@ TEST_CASE("curl easy handle active limit scales with HTTP/2 connection count") {
     CHECK(stt::max_active_easy_handles_for_client_count(1) == 64);
     CHECK(stt::max_active_easy_handles_for_client_count(4) == 256);
 }
+// NOLINTEND(cert-err33-c)

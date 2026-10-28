@@ -102,7 +102,9 @@ java-deps: ensure-jdk ensure-maven
     cd services/java-helidon-nima && JAVA_HOME="$PWD/../../.tools/jdk-$(awk -F\" '/java_jdk =/{print $2; exit}' ../../versions.lock.toml)" ../../.tools/bin/mvn -B -q -DskipTests dependency:go-offline
 
 # `mvn verify` runs the full per-language gate: Spotless format check,
-# Error Prone + NullAway, compile, tests, Maven Enforcer.
+# Error Prone + NullAway, compile, tests, Maven Enforcer, plus perf-only
+# static analysis at `verify`: SpotBugs (PERFORMANCE category) and PMD
+# (category/java/performance.xml). Any finding fails the build.
 java-check: ensure-jdk ensure-maven
     cd services/java-helidon-nima && JAVA_HOME="$PWD/../../.tools/jdk-$(awk -F\" '/java_jdk =/{print $2; exit}' ../../versions.lock.toml)" ../../.tools/bin/mvn -B verify
 
@@ -143,9 +145,10 @@ elixir-lock:
 
 elixir-check: elixir-deps
     cd services/elixir-phoenix && mix format --check-formatted
+    cd services/elixir-phoenix && mix compile --warnings-as-errors --force
     cd services/elixir-phoenix && mix credo --strict
     cd services/elixir-phoenix && mix dialyzer
-    cd services/elixir-phoenix && mix test
+    cd services/elixir-phoenix && mix test --warnings-as-errors
 
 rust-tools:
     cargo install cargo-nextest --version "$(awk -F\" '/cargo_nextest =/{print $2; exit}' versions.lock.toml)" --locked
@@ -170,10 +173,15 @@ cpp-deps: ensure-bazelisk
 cpp-lock: ensure-bazelisk
     cd services/cpp23-uwebsockets && ../../.tools/bin/bazel mod deps --lockfile_mode=update
 
-# `bazel build` enforces the strict scalacOptions equivalent (-Werror -Wall
-# -Wextra -Wpedantic -Wconversion ...) declared in .bazelrc. clang-tidy is
-# wired as a Bazel aspect on a tidy config; clang-format checks formatting.
+# Gate, in order: clang-format (`--dry-run --Werror`, sh_test in tools/lint),
+# clang-tidy incl. clang-analyzer-* (bazel_clang_tidy aspect via
+# `--config=tidy`, our targets only), the strict-warning (-Werror -Wall -Wextra
+# -Wpedantic, see BUILD.bazel) opt build, then every test (which re-runs the
+# cached format test). clang-tidy and clang-format are the hermetic LLVM 21.1.8
+# binaries from toolchains_llvm, so local and CI results match.
 cpp-check: ensure-bazelisk
+    cd services/cpp23-uwebsockets && ../../.tools/bin/bazel test //tools/lint:clang_format_test
+    cd services/cpp23-uwebsockets && ../../.tools/bin/bazel build --config=tidy //...
     cd services/cpp23-uwebsockets && ../../.tools/bin/bazel build --config=opt //:stt-cpp23-uwebsockets
     cd services/cpp23-uwebsockets && ../../.tools/bin/bazel test //...
 

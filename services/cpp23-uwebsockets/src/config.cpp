@@ -15,8 +15,9 @@ namespace {
 template <std::integral Int>
 Int parse_int_or_throw(std::string_view key, std::string_view raw) {
     Int value{};
-    const auto* end = raw.data() + raw.size();
-    const auto [ptr, ec] = std::from_chars(raw.data(), end, value);
+    const char* const first = raw.data();
+    const char* const end = first + raw.size();
+    const auto [ptr, ec] = std::from_chars(first, end, value);
     if (ec != std::errc{} || ptr != end) {
         throw std::runtime_error(std::format("invalid integer for {}: {}", key, raw));
     }
@@ -52,12 +53,15 @@ Config load_config(const EnvLookup& env) {
     Config config;
     config.port = with_default<std::uint16_t>(env, "PORT", config.port);
     config.inference_url = with_default(env, "INFERENCE_URL", config.inference_url);
-    config.inference_timeout = with_default_ms(env, "INFERENCE_TIMEOUT_MS", config.inference_timeout);
-    config.inference_http_clients = with_default(env, "INFERENCE_HTTP_CLIENTS", config.inference_http_clients);
+    config.inference_timeout =
+        with_default_ms(env, "INFERENCE_TIMEOUT_MS", config.inference_timeout);
+    config.inference_http_clients =
+        with_default(env, "INFERENCE_HTTP_CLIENTS", config.inference_http_clients);
     config.cpu_passes = with_default(env, "CPU_PASSES", config.cpu_passes);
     config.model_delay_ms = with_default(env, "MODEL_DELAY_MS", config.model_delay_ms);
     config.flush_interval = with_default_ms(env, "FLUSH_INTERVAL_MS", config.flush_interval);
-    config.flush_phase_jitter = with_default_ms(env, "FLUSH_PHASE_JITTER_MS", config.flush_phase_jitter);
+    config.flush_phase_jitter =
+        with_default_ms(env, "FLUSH_PHASE_JITTER_MS", config.flush_phase_jitter);
     config.worker_threads = with_default(env, "WORKER_THREADS", config.worker_threads);
 
     // A non-positive flush interval would spin `FlushTimerWheel::tick`'s

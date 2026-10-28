@@ -1,3 +1,6 @@
+// cert-err33-c: on macOS arm64 doctest's CHECK expands DOCTEST_BREAK_INTO_DEBUGGER
+// to an unchecked `raise(SIGTRAP)`; the hit is in the macro, not in this file.
+// NOLINTBEGIN(cert-err33-c)
 #include "doctest/doctest.h"
 
 #include <chrono>
@@ -62,7 +65,8 @@ TEST_CASE("env vars override defaults") {
 }
 
 TEST_CASE("unparseable integer is an error") {
-    CHECK_THROWS_AS(stt::load_config(with_env({{"PORT", "twenty-five-hundred"}})), std::runtime_error);
+    CHECK_THROWS_AS(stt::load_config(with_env({{"PORT", "twenty-five-hundred"}})),
+                    std::runtime_error);
 }
 
 TEST_CASE("empty value falls back to default") {
@@ -72,3 +76,4 @@ TEST_CASE("empty value falls back to default") {
     const auto config = stt::load_config(with_env({{"CPU_PASSES", ""}}));
     CHECK(config.cpu_passes == 4);
 }
+// NOLINTEND(cert-err33-c)

@@ -110,3 +110,32 @@ cc_test(
 # IDE `compile_commands.json`; nothing in the gateway build needs it.
 # Regenerate compile_commands via a newer rules_python-aware extractor
 # locally if IDE support is wanted.
+
+# Lint configs, referenced from .bazelrc (`--config=tidy`) and tools/lint.
+# Globbed so the Docker build (which copies these dotfiles after `bazel fetch`)
+# still loads this package before they exist.
+filegroup(
+    name = "clang_tidy_config",
+    srcs = glob([".clang-tidy"], allow_empty = True),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "clang_format_config",
+    srcs = glob([".clang-format"], allow_empty = True),
+    visibility = ["//visibility:public"],
+)
+
+# Every C++ file we own; tools/lint:clang_format_test checks them.
+filegroup(
+    name = "cpp_sources",
+    srcs = glob([
+        "src/**/*.cpp",
+        "src/**/*.hpp",
+        "src/**/*.h",
+        "tests/**/*.cpp",
+        "tests/**/*.hpp",
+        "tests/**/*.h",
+    ], allow_empty = True),
+    visibility = ["//visibility:public"],
+)

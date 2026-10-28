@@ -59,9 +59,9 @@ public final class Session implements WsListener {
 
     private final AtomicBoolean closed = new AtomicBoolean(false);
     /** Single-WS-callback-thread invariant: Helidon serializes per-connection callbacks. */
-    private boolean started = false;
+    private boolean started;
 
-    long seq = 0L;
+    long seq;
     List<Frame> buffer = new ArrayList<>(TYPICAL_BATCH);
 
     private volatile @Nullable Thread flushThread;
@@ -92,7 +92,7 @@ public final class Session implements WsListener {
         }
         try {
             jsonMapper.readValue(text, StartMessage.class);
-        } catch (Exception unused) {
+        } catch (Exception _) {
             closeWith(session, Protocol.CLOSE_PROTOCOL_ERROR, Protocol.REASON_NEED_START);
             return;
         }

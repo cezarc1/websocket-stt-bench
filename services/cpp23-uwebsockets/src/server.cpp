@@ -109,7 +109,8 @@ private:
             return;
         }
         const auto now = std::chrono::steady_clock::now();
-        const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(queue_.begin()->first - now);
+        const auto delay =
+            std::chrono::duration_cast<std::chrono::milliseconds>(queue_.begin()->first - now);
         const auto delay_ms = std::max<long>(1, delay.count());
         us_timer_set(timer_, &tick_thunk, static_cast<int>(delay_ms), 0);
     }
@@ -138,7 +139,7 @@ public:
         if (closed_) {
             return;
         }
-        ws_->send(payload, uWS::OpCode::TEXT, false);
+        ws_->send(payload, uWS::OpCode::TEXT, /*compress=*/0);
     }
 
     void close_with(int code, std::string_view reason) override {
@@ -202,8 +203,8 @@ void register_routes(uWS::App& app, LoopState& loop_state) {
         auto* data = static_cast<PerSocketData*>(ws->getUserData());
         auto sink = std::make_shared<WsSink>(ws);
         data->sink = sink;
-        data->session = std::make_shared<Session>(loop_state.config, loop_state.inference,
-                                                  sink, loop_state.scheduler);
+        data->session = std::make_shared<Session>(loop_state.config, loop_state.inference, sink,
+                                                  loop_state.scheduler);
 
         const auto first_fire = compute_first_fire(loop_state.config);
         data->session->set_expected_next_flush(first_fire);
@@ -252,7 +253,8 @@ void register_routes(uWS::App& app, LoopState& loop_state) {
     app.ws<PerSocketData>("/ws/stt", std::move(behavior));
 }
 
-void run_one_app(const Config& config, InferenceClient& inference, std::atomic<int>& listen_failures) {
+void run_one_app(const Config& config, InferenceClient& inference,
+                 std::atomic<int>& listen_failures) {
     uWS::App app;
     LoopState loop_state{config, inference, uWS::Loop::get()};
     register_routes(app, loop_state);

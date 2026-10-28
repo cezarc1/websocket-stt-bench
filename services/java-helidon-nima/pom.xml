@@ -18,8 +18,8 @@
         <helidon.version>4.3.0</helidon.version>
         <jackson.version>2.22.0</jackson.version>
         <junit.version>5.11.4</junit.version>
-        <errorprone.version>2.36.0</errorprone.version>
-        <nullaway.version>0.12.2</nullaway.version>
+        <errorprone.version>2.51.0</errorprone.version>
+        <nullaway.version>0.14.3</nullaway.version>
         <palantir.version>2.90.0</palantir.version>
         <jspecify.version>1.0.0</jspecify.version>
 
@@ -29,6 +29,12 @@
         <maven.enforcer.plugin.version>3.5.0</maven.enforcer.plugin.version>
         <maven.shade.plugin.version>3.6.0</maven.shade.plugin.version>
         <spotless.plugin.version>3.4.0</spotless.plugin.version>
+
+        <!-- Perf-oriented static analysis (both gate `verify`). -->
+        <spotbugs.plugin.version>4.10.5.0</spotbugs.plugin.version>
+        <spotbugs.version>4.10.5</spotbugs.version>
+        <maven.pmd.plugin.version>3.28.0</maven.pmd.plugin.version>
+        <pmd.version>7.28.0</pmd.version>
     </properties>
 
     <dependencyManagement>
@@ -175,6 +181,81 @@
                 </configuration>
                 <executions>
                     <execution>
+                        <goals><goal>check</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- SpotBugs, PERFORMANCE category only (see spotbugs-include.xml). -->
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
+                <version>${spotbugs.plugin.version}</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>com.github.spotbugs</groupId>
+                        <artifactId>spotbugs</artifactId>
+                        <version>${spotbugs.version}</version>
+                    </dependency>
+                </dependencies>
+                <configuration>
+                    <effort>Max</effort>
+                    <threshold>Low</threshold>
+                    <includeTests>false</includeTests>
+                    <includeFilterFile>${project.basedir}/spotbugs-include.xml</includeFilterFile>
+                    <failOnError>true</failOnError>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>spotbugs-performance</id>
+                        <phase>verify</phase>
+                        <goals><goal>check</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- PMD, category/java/performance.xml only. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-pmd-plugin</artifactId>
+                <version>${maven.pmd.plugin.version}</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>net.sourceforge.pmd</groupId>
+                        <artifactId>pmd-core</artifactId>
+                        <version>${pmd.version}</version>
+                    </dependency>
+                    <dependency>
+                        <groupId>net.sourceforge.pmd</groupId>
+                        <artifactId>pmd-java</artifactId>
+                        <version>${pmd.version}</version>
+                    </dependency>
+                    <dependency>
+                        <groupId>net.sourceforge.pmd</groupId>
+                        <artifactId>pmd-javascript</artifactId>
+                        <version>${pmd.version}</version>
+                    </dependency>
+                    <dependency>
+                        <groupId>net.sourceforge.pmd</groupId>
+                        <artifactId>pmd-jsp</artifactId>
+                        <version>${pmd.version}</version>
+                    </dependency>
+                </dependencies>
+                <configuration>
+                    <targetJdk>${maven.compiler.release}</targetJdk>
+                    <rulesets>
+                        <ruleset>category/java/performance.xml</ruleset>
+                    </rulesets>
+                    <includeTests>false</includeTests>
+                    <printFailingErrors>true</printFailingErrors>
+                    <failOnViolation>true</failOnViolation>
+                    <failurePriority>5</failurePriority>
+                    <linkXRef>false</linkXRef>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>pmd-performance</id>
+                        <phase>verify</phase>
                         <goals><goal>check</goal></goals>
                     </execution>
                 </executions>

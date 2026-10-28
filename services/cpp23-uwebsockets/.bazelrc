@@ -40,10 +40,15 @@ build:tsan --copt=-fsanitize=thread
 build:tsan --linkopt=-fsanitize=thread
 build:tsan --strip=never
 
-# Lint via clang-tidy as a Bazel aspect: `bazel build --aspects=...`. The
-# aspect picks up `.clang-tidy` from this directory.
-build:tidy --aspects=//tools/clang_tidy:clang_tidy.bzl%clang_tidy_aspect
+# Lint via clang-tidy as a Bazel aspect: `bazel build --config=tidy //...`.
+# erenon/bazel_clang_tidy (pinned in MODULE.bazel) runs the hermetic LLVM
+# 21.1.8 clang-tidy with this directory's `.clang-tidy`. The aspect skips
+# external repos, so only our own targets are linted; `HeaderFilterRegex`
+# keeps diagnostics from third-party headers out. Reports are cached per TU.
+build:tidy --aspects=@bazel_clang_tidy//clang_tidy:clang_tidy.bzl%clang_tidy_aspect
 build:tidy --output_groups=report
+build:tidy --@bazel_clang_tidy//:clang_tidy_config=//:clang_tidy_config
+build:tidy --@bazel_clang_tidy//:clang_tidy_executable=//tools/lint:clang_tidy
 
 # Use the hermetic Clang toolchain registered in MODULE.bazel.
 build --incompatible_enable_cc_toolchain_resolution

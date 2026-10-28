@@ -202,8 +202,10 @@ gateways:
     env:
       WORKER_THREADS: "1"
       INFERENCE_HTTP_CLIENTS: "4"
-      # Production / load-test JVM flags — no tracePinnedThreads (overhead).
-      # JEP 491 (JDK 24) handles the synchronized-pinning case structurally.
+      # Production / load-test JVM flags — no pin diagnostics (overhead).
+      # JEP 491 (JDK 24) removes synchronized-induced pinning. For dev pin
+      # investigation use JFR's jdk.VirtualThreadPinned event (recipe in
+      # docker/java-helidon-nima.Dockerfile); -Djdk.tracePinnedThreads is gone.
       JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
     resources:
       requests:
