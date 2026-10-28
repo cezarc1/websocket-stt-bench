@@ -179,9 +179,7 @@ private:
     std::size_t cap_;
 };
 
-void configure_easy(CURL* easy,
-                    EasyState& state,
-                    const std::string& url,
+void configure_easy(CURL* easy, EasyState& state, const std::string& url,
                     std::chrono::milliseconds timeout) {
     curl_slist* headers = nullptr;
     const auto header_cpu = std::format("x-cpu-passes: {}", state.request.cpu_passes);
@@ -228,23 +226,25 @@ InferenceResult finish_easy(CURL* easy, EasyState& state, CURLcode code) {
     return parsed;
 }
 
-void submit_one(CURLM* multi,
-                const std::string& url,
-                std::chrono::milliseconds timeout,
-                ActiveList& active,
-                IdlePool& idle,
-                CurlInferenceClient::Request request) {
+// Every completion goes through here so the request body always travels back
+// with the result, whatever the outcome, and the caller can reuse its capacity.
+void complete(CurlInferenceClient::Request& request, InferenceResult result) {
+    request.on_complete(std::move(result), std::move(request.body));
+}
+
+void submit_one(CURLM* multi, const std::string& url, std::chrono::milliseconds timeout,
+                ActiveList& active, IdlePool& idle, CurlInferenceClient::Request request) {
     std::unique_ptr<EasyState> state;
     try {
         state = idle.acquire();
     } catch (const std::runtime_error& ex) {
-        request.on_complete(std::unexpected(InferenceFailure{
-            .stage = ErrorStage::InferenceRequest,
-            .kind = ErrorKind::ConnectionReset,
-            .detail = ex.what(),
-            .status = std::nullopt,
-            .retryable = true,
-        }));
+        complete(request, std::unexpected(InferenceFailure{
+                              .stage = ErrorStage::InferenceRequest,
+                              .kind = ErrorKind::ConnectionReset,
+                              .detail = ex.what(),
+                              .status = std::nullopt,
+                              .retryable = true,
+                          }));
         return;
     }
 
@@ -255,7 +255,7 @@ void submit_one(CURLM* multi,
 
     const CURLMcode add_code = curl_multi_add_handle(multi, easy);
     if (add_code != CURLM_OK) {
-        state->request.on_complete(std::unexpected(classify_multi(add_code)));
+        complete(state->request, std::unexpected(classify_multi(add_code)));
         idle.recycle(std::move(state));
         return;
     }
@@ -265,7 +265,7 @@ void submit_one(CURLM* multi,
 void harvest_completions(CURLM* multi, ActiveList& active, IdlePool& idle) {
     int messages_left = 0;
     while (true) {
-        CURLMsg* message = curl_multi_info_read(multi, &messages_left);
+        const CURLMsg* message = curl_multi_info_read(multi, &messages_left);
         if (message == nullptr) {
             break;
         }
@@ -274,7 +274,8 @@ void harvest_completions(CURLM* multi, ActiveList& active, IdlePool& idle) {
         }
 
         CURL* easy = message->easy_handle;
-        auto it = std::ranges::find_if(active, [easy](const auto& entry) { return entry.first == easy; });
+        auto it =
+            std::ranges::find_if(active, [easy](const auto& entry) { return entry.first == easy; });
         if (it == active.end()) {
             continue;
         }
@@ -283,15 +284,16 @@ void harvest_completions(CURLM* multi, ActiveList& active, IdlePool& idle) {
         active.erase(it);
         curl_multi_remove_handle(multi, easy);
         auto result = finish_easy(easy, *state, message->data.result);
-        state->request.on_complete(std::move(result));
+        complete(state->request, std::move(result));
         idle.recycle(std::move(state));
     }
 }
 
-void fail_active(CURLM* multi, ActiveList& active, IdlePool& idle, const InferenceFailure& failure) {
+void fail_active(CURLM* multi, ActiveList& active, IdlePool& idle,
+                 const InferenceFailure& failure) {
     for (auto& [easy, state] : active) {
         curl_multi_remove_handle(multi, easy);
-        state->request.on_complete(std::unexpected(failure));
+        complete(state->request, std::unexpected(failure));
         idle.recycle(std::move(state));
     }
     active.clear();
@@ -323,10 +325,11 @@ bool curl_supports_http2() noexcept {
     return info != nullptr && (info->features & CURL_VERSION_HTTP2) != 0;
 }
 
-CurlInferenceClient::CurlInferenceClient(std::string base_url,
-                                         std::chrono::milliseconds timeout,
+CurlInferenceClient::CurlInferenceClient(std::string base_url, std::chrono::milliseconds timeout,
                                          int client_count)
-    : url_(std::move(base_url) + "/infer"), timeout_(timeout), client_count_(std::max(1, client_count)) {
+    : url_(std::move(base_url) + "/infer"),
+      timeout_(timeout),
+      client_count_(std::max(1, client_count)) {
     // Process-global; no paired cleanup — process exit reaps it.
     static std::once_flag curl_init_flag;
     std::call_once(curl_init_flag, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
@@ -349,7 +352,7 @@ CurlInferenceClient::CurlInferenceClient(std::string base_url,
 
 CurlInferenceClient::~CurlInferenceClient() {
     {
-        const std::lock_guard lock(queue_mutex_);
+        const std::scoped_lock lock(queue_mutex_);
         shutting_down_ = true;
     }
     queue_cv_.notify_all();
@@ -363,11 +366,10 @@ CurlInferenceClient::~CurlInferenceClient() {
     }
 }
 
-void CurlInferenceClient::infer_async(std::vector<std::byte> body,
-                                      int cpu_passes,
-                                      std::function<void(InferenceResult)> on_complete) {
+void CurlInferenceClient::infer_async(std::vector<std::byte> body, int cpu_passes,
+                                      InferenceCallback on_complete) {
     {
-        const std::lock_guard lock(queue_mutex_);
+        const std::scoped_lock lock(queue_mutex_);
         queue_.push_back(Request{
             .body = std::move(body),
             .cpu_passes = cpu_passes,
@@ -409,9 +411,7 @@ void CurlInferenceClient::network_main() {
         wait_for_work(!active.empty());
     }
 
-    fail_active(multi,
-                active,
-                idle,
+    fail_active(multi, active, idle,
                 InferenceFailure{
                     .stage = ErrorStage::InferenceRequest,
                     .kind = ErrorKind::ConnectionReset,
@@ -426,7 +426,7 @@ std::deque<CurlInferenceClient::Request> CurlInferenceClient::drain_queue(std::s
     if (max_take == 0) {
         return pending;
     }
-    const std::lock_guard lock(queue_mutex_);
+    const std::scoped_lock lock(queue_mutex_);
     while (!queue_.empty() && pending.size() < max_take) {
         pending.push_back(std::move(queue_.front()));
         queue_.pop_front();
@@ -435,7 +435,7 @@ std::deque<CurlInferenceClient::Request> CurlInferenceClient::drain_queue(std::s
 }
 
 bool CurlInferenceClient::should_exit() const {
-    const std::lock_guard lock(queue_mutex_);
+    const std::scoped_lock lock(queue_mutex_);
     return shutting_down_ && queue_.empty();
 }
 

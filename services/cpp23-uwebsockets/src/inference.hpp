@@ -29,6 +29,10 @@ struct InferenceFailure {
 
 using InferenceResult = std::expected<InferResponse, InferenceFailure>;
 
+// Completion hands the request body back (on every path) so the caller can
+// reuse its capacity for the next request.
+using InferenceCallback = std::function<void(InferenceResult, std::vector<std::byte> body)>;
+
 struct CurlMultiTuning {
     long pipelining;
     long max_host_connections;
@@ -56,9 +60,8 @@ public:
     InferenceClient& operator=(InferenceClient&&) = delete;
     virtual ~InferenceClient() = default;
 
-    virtual void infer_async(std::vector<std::byte> body,
-                             int cpu_passes,
-                             std::function<void(InferenceResult)> on_complete) = 0;
+    virtual void infer_async(std::vector<std::byte> body, int cpu_passes,
+                             InferenceCallback on_complete) = 0;
 };
 
 // Production implementation. One libcurl multi pump owns all active inference
@@ -71,16 +74,15 @@ public:
     // name it; not part of the user-facing API.
     struct Request {
         std::vector<std::byte> body;
-        int cpu_passes;
-        std::function<void(InferenceResult)> on_complete;
+        int cpu_passes = 0;
+        InferenceCallback on_complete;
     };
 
     CurlInferenceClient(std::string base_url, std::chrono::milliseconds timeout, int client_count);
     ~CurlInferenceClient() override;
 
-    void infer_async(std::vector<std::byte> body,
-                     int cpu_passes,
-                     std::function<void(InferenceResult)> on_complete) override;
+    void infer_async(std::vector<std::byte> body, int cpu_passes,
+                     InferenceCallback on_complete) override;
 
 private:
     void network_main();

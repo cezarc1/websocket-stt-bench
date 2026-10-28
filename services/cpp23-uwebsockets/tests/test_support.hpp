@@ -38,7 +38,7 @@ public:
 class CapturingInference final : public InferenceClient {
 public:
     void infer_async(std::vector<std::byte> body, int cpu_passes,
-                     std::function<void(InferenceResult)> on_complete) override {
+                     InferenceCallback on_complete) override {
         requests.push_back(Request{
             .body = std::move(body),
             .cpu_passes = cpu_passes,
@@ -48,7 +48,9 @@ public:
     struct Request {
         std::vector<std::byte> body;
         int cpu_passes;
-        std::function<void(InferenceResult)> callback;
+        InferenceCallback callback;
+        // Mirrors the real client: the body goes back with the result.
+        void complete(InferenceResult result) { callback(std::move(result), std::move(body)); }
     };
     std::vector<Request> requests;
 };
@@ -70,7 +72,8 @@ inline std::array<std::byte, FRAME_BYTES> frame_of(unsigned char fill) {
     return bytes;
 }
 
-inline std::span<const std::byte> as_span(const std::array<std::byte, FRAME_BYTES>& frame) noexcept {
+inline std::span<const std::byte>
+as_span(const std::array<std::byte, FRAME_BYTES>& frame) noexcept {
     return {frame.data(), frame.size()};
 }
 

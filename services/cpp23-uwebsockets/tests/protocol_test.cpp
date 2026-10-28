@@ -1,3 +1,6 @@
+// cert-err33-c: on macOS arm64 doctest's CHECK expands DOCTEST_BREAK_INTO_DEBUGGER
+// to an unchecked `raise(SIGTRAP)`; the hit is in the macro, not in this file.
+// NOLINTBEGIN(cert-err33-c)
 #include "doctest/doctest.h"
 
 #include <string>
@@ -8,14 +11,15 @@
 
 TEST_CASE("StartMessage accepts the canonical body") {
     stt::StartMessage parsed{};
-    const auto err = glz::read<stt::STRICT_JSON>(parsed, std::string("{\"type\":\"start\"}"));
+    const auto err = glz::read<stt::STRICT_JSON>(parsed, std::string(R"({"type":"start"})"));
     CHECK_FALSE(err);
     CHECK(parsed.type == "start");
 }
 
 TEST_CASE("StartMessage rejects unknown fields under strict opts") {
     stt::StartMessage parsed{};
-    const auto err = glz::read<stt::STRICT_JSON>(parsed, std::string("{\"type\":\"start\",\"sneaky\":1}"));
+    const auto err =
+        glz::read<stt::STRICT_JSON>(parsed, std::string(R"({"type":"start","sneaky":1})"));
     CHECK(static_cast<bool>(err));
 }
 
@@ -101,3 +105,4 @@ TEST_CASE("ErrorMessage preserves null for absent optionals") {
     CHECK(out.contains("\"retryable\":true"));
     CHECK(out.contains("\"kind\":\"timeout\""));
 }
+// NOLINTEND(cert-err33-c)
