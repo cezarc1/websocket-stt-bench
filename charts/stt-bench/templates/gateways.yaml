@@ -30,7 +30,7 @@ spec:
         {{- toYaml $.Values.podSecurityContext | nindent 8 }}
       containers:
         - name: gateway
-          image: {{ include "stt-bench.image" (list $ $gateway.image) }}
+          image: {{ include "stt-bench.image" (list $ $gateway.image $gateway.imageTag) }}
           imagePullPolicy: {{ $.Values.images.pullPolicy }}
           ports:
             - name: http

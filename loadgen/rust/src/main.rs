@@ -443,7 +443,10 @@ struct Output {
     ramp_up_secs: u64,
     session_start_spread_ms: u64,
     partials: u64,
+    /// Failed sessions, one per session, *including* sessions that failed on a
+    /// timeout (see `record_session_outcome`). Disjoint from `inference_errors`.
     protocol_errors: u64,
+    /// Gateway `error` frames received; the session keeps running.
     inference_errors: u64,
     inference_error_counts: Vec<InferenceErrorCount>,
     inference_error_samples: Vec<InferenceErrorSample>,
@@ -457,6 +460,8 @@ struct Output {
     /// verifier queue was full. Non-zero means `verified_partials` undercounts
     /// the requested sample; continuity was still checked for all of them.
     verify_dropped: u64,
+    /// Cause breakdown for the subset of `protocol_errors` that were timeouts.
+    /// Already included in `protocol_errors`; do not add them again.
     timeouts: TimeoutOutput,
     newest_frame_to_partial_latency: Percentiles,
     oldest_frame_to_partial_latency: Percentiles,
@@ -523,7 +528,7 @@ async fn main() -> anyhow::Result<()> {
         let session_start_at = run_start
             + session_start_delay(session_id, args.sessions, ramp_up, session_start_spread);
         tokio::spawn(async move {
-            match timeout(
+            let outcome = timeout(
                 timeouts.session,
                 run_session(
                     session_id,
@@ -541,18 +546,8 @@ async fn main() -> anyhow::Result<()> {
                 ),
             )
             .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    errors.fetch_add(1, Ordering::Relaxed);
-                    warn!(session_id, %error, "session failed");
-                }
-                Err(_elapsed) => {
-                    counters.increment(TimeoutKind::Session);
-                    errors.fetch_add(1, Ordering::Relaxed);
-                    warn!(session_id, "session timed out");
-                }
-            }
+            .map_err(|_elapsed| ());
+            record_session_outcome(session_id, outcome, &errors, &counters);
         });
     }
     drop(sample_tx);
@@ -944,6 +939,33 @@ async fn process_inbound(
     Ok(InboundState::Open)
 }
 
+/// Count one finished session. Every failed session -- whatever the cause --
+/// bumps `protocol_errors` exactly once; a session that failed because of a
+/// timeout additionally bumps exactly one `timeouts.*` counter (inside `timed`,
+/// the close-grace arm, or here for the whole-session deadline). So
+/// `timeouts.*` is a *breakdown* of a subset of `protocol_errors`, not a
+/// disjoint count: the number of failed sessions is `protocol_errors`.
+/// `Err(())` means the whole-session deadline elapsed.
+fn record_session_outcome(
+    session_id: usize,
+    outcome: Result<anyhow::Result<()>, ()>,
+    protocol_errors: &AtomicU64,
+    timeout_counters: &TimeoutCounters,
+) {
+    match outcome {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            protocol_errors.fetch_add(1, Ordering::Relaxed);
+            warn!(session_id, %error, "session failed");
+        }
+        Err(()) => {
+            timeout_counters.increment(TimeoutKind::Session);
+            protocol_errors.fetch_add(1, Ordering::Relaxed);
+            warn!(session_id, "session timed out");
+        }
+    }
+}
+
 async fn timed<T, F>(
     duration: Duration,
     future: F,
@@ -1024,6 +1046,57 @@ fn write_millis(writer: &mut impl Write, micros: u64) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn timeout_total(counters: &TimeoutCounters) -> u64 {
+        let t = counters.snapshot();
+        t.connect + t.send + t.close + t.session
+    }
+
+    #[test]
+    fn clean_session_counts_nothing() {
+        let (errors, counters) = (AtomicU64::new(0), TimeoutCounters::default());
+        record_session_outcome(0, Ok(Ok(())), &errors, &counters);
+        assert_eq!(errors.load(Ordering::Relaxed), 0);
+        assert_eq!(timeout_total(&counters), 0);
+    }
+
+    #[test]
+    fn non_timeout_failure_counts_only_protocol_error() {
+        let (errors, counters) = (AtomicU64::new(0), TimeoutCounters::default());
+        record_session_outcome(0, Ok(Err(anyhow::anyhow!("decode"))), &errors, &counters);
+        assert_eq!(errors.load(Ordering::Relaxed), 1);
+        assert_eq!(timeout_total(&counters), 0);
+    }
+
+    #[test]
+    fn session_deadline_counts_once_in_both() {
+        let (errors, counters) = (AtomicU64::new(0), TimeoutCounters::default());
+        record_session_outcome(0, Err(()), &errors, &counters);
+        assert_eq!(errors.load(Ordering::Relaxed), 1);
+        assert_eq!(counters.snapshot().session, 1);
+        assert_eq!(timeout_total(&counters), 1);
+    }
+
+    /// A connect/send timeout bumps its own counter inside `timed`, and the
+    /// resulting session error then bumps `protocol_errors`: one failed session,
+    /// one protocol error, one timeout -- the timeout is a subset, not extra.
+    #[tokio::test]
+    async fn inner_timeout_is_subset_of_protocol_errors() {
+        let (errors, counters) = (AtomicU64::new(0), TimeoutCounters::default());
+        let result = timed(
+            Duration::from_millis(1),
+            std::future::pending::<anyhow::Result<()>>(),
+            &counters,
+            TimeoutKind::Connect,
+            "connect",
+        )
+        .await;
+        assert!(result.is_err());
+        record_session_outcome(0, Ok(result), &errors, &counters);
+        assert_eq!(errors.load(Ordering::Relaxed), 1);
+        assert_eq!(counters.snapshot().connect, 1);
+        assert_eq!(timeout_total(&counters), 1);
+    }
 
     #[test]
     fn writes_sample_csv_header_and_row() {

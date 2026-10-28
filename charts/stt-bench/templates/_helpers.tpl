@@ -24,7 +24,9 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "stt-bench.image" -}}
 {{- $root := index . 0 -}}
 {{- $image := index . 1 -}}
-{{- printf "%s/%s/%s:%s" $root.Values.images.registry $root.Values.images.repository $image $root.Values.images.tag -}}
+{{- $tag := $root.Values.images.tag -}}
+{{- if and (gt (len .) 2) (index . 2) -}}{{- $tag = index . 2 -}}{{- end -}}
+{{- printf "%s/%s/%s:%s" $root.Values.images.registry $root.Values.images.repository $image $tag -}}
 {{- end -}}
 
 {{- define "stt-bench.imagePullSecrets" -}}
