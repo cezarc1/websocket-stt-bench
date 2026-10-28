@@ -63,6 +63,8 @@ let parse_one b ~pos ~len =
     let base_len = byte1 land 0x7f in
     if not masked
     then Error "client frame not masked"
+    else if byte0 land 0x70 <> 0
+    then Error "reserved bits set without a negotiated extension"
     else if opcode_int >= 8 && ((not fin) || base_len > 125)
     then Error "invalid control frame"
     else (

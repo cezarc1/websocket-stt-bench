@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"io"
 	"math/rand/v2"
 	"sync"
 	"time"
@@ -19,6 +20,11 @@ const (
 	ReasonTextAfterStart        = "expected binary PCM frames after start"
 	ReasonBadFrameSize          = "expected 640 byte PCM frame"
 	typicalBatch                = 50
+	// MaxMessageBytes caps how much of one message is read. The server sets
+	// the library read limit to the same value; readMessage stops one byte
+	// past it so an oversized message is classified (1003 / 1002) here
+	// instead of tripping coder/websocket's limit, which closes with 1009.
+	MaxMessageBytes = 8 * 1024
 )
 
 type MessageType int
@@ -42,6 +48,9 @@ type Core struct {
 	runner      Runner
 	outboxDepth int
 	inflight    chan struct{}
+	// limited is reused by readMessage (reader goroutine only) so capping
+	// the read adds no per-message allocation.
+	limited io.LimitedReader
 
 	mu      sync.Mutex
 	started bool
@@ -86,7 +95,7 @@ func (c *Core) Run(ctx context.Context, conn *websocket.Conn, flushInterval, flu
 	go c.flushLoop(ctx, outbox, flushInterval, flushPhaseJitter)
 
 	for {
-		messageType, payload, err := conn.Read(ctx)
+		messageType, payload, err := c.readMessage(ctx, conn)
 		if err != nil {
 			if status := websocket.CloseStatus(err); status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway {
 				_ = conn.Close(websocket.StatusNormalClosure, "")
@@ -102,8 +111,24 @@ func (c *Core) Run(ctx context.Context, conn *websocket.Conn, flushInterval, flu
 	}
 }
 
+// readMessage is conn.Read with the payload capped at MaxMessageBytes+1, so
+// anything larger than MaxMessageBytes still reaches handleMessage as a
+// wrong-sized message. The library limit counts the same extra byte
+// (SetReadLimit(n) allows n+1), so it never fires here.
+func (c *Core) readMessage(ctx context.Context, conn *websocket.Conn) (websocket.MessageType, []byte, error) {
+	messageType, reader, err := conn.Reader(ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	c.limited.R = reader
+	c.limited.N = MaxMessageBytes + 1
+	payload, err := io.ReadAll(&c.limited)
+	c.limited.R = nil
+	return messageType, payload, err
+}
+
 func (c *Core) readStart(ctx context.Context, conn *websocket.Conn) bool {
-	messageType, payload, err := conn.Read(ctx)
+	messageType, payload, err := c.readMessage(ctx, conn)
 	if err != nil {
 		return false
 	}

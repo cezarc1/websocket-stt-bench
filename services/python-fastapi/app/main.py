@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import FastAPI, WebSocket
 from pydantic import ValidationError
+from starlette.types import Message
 
 from app.config import (
     DEFAULT_CPU_PASSES,
@@ -67,6 +68,19 @@ async def lifespan(app_: FastAPI) -> AsyncGenerator[None]:
 app = FastAPI(title="websocket-stt-bench FastAPI", lifespan=lifespan)
 
 
+def is_start_message(message: Message) -> bool:
+    # A binary first frame has no "text" key (Starlette's receive_json would
+    # raise KeyError and drop the socket without a close code).
+    text = message.get("text")
+    if text is None:
+        return False
+    try:
+        StartMessage.model_validate_json(text)
+    except ValidationError:
+        return False
+    return True
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
     return {"ok": True, "runtime": "python-fastapi"}
@@ -75,10 +89,11 @@ async def health() -> dict[str, Any]:
 @app.websocket("/ws/stt")
 async def stt_socket(websocket: WebSocket, inference_client: InferenceClientDep) -> None:
     await websocket.accept()
-    try:
-        StartMessage.model_validate(await websocket.receive_json())
-    except TypeError, ValueError, ValidationError:
-        logger.exception("invalid start message")
+    message = await websocket.receive()
+    if message["type"] == "websocket.disconnect":
+        return
+    if not is_start_message(message):
+        logger.warning("invalid start message")
         await websocket.close(code=1002, reason="first message must be start")
         return
     await SttSession(

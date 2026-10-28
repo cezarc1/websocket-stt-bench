@@ -33,6 +33,10 @@
 #   RESULTS_DIR  local dir for the captured summary (default /tmp/bench/results;
 #                results are gitignored artifacts, not tracked)
 #   LOADGEN_CPU / LOADGEN_MEM  loadgen Job resources (default 4 / 4Gi)
+#   LOADGEN_NODE  pin the loadgen Job to this node (kubernetes.io/hostname);
+#                 default: scheduler's choice
+#   VERIFY_EVERY  loadgen --verify-every (default 1 = check every partial's
+#                 values; continuity is always checked)
 set -euo pipefail
 
 SESS="${1:?usage: SVC=.. PORT=.. LABEL=.. run_point.sh <sessions> [warmup measure ramp spread]}"
@@ -50,6 +54,10 @@ LOADGEN_IMG="${LOADGEN_IMG:-ghcr.io/cezarc1/websocket-stt-bench/loadgen:main}"
 RESULTS_DIR="${RESULTS_DIR:-/tmp/bench/results}"
 LOADGEN_CPU="${LOADGEN_CPU:-4}"
 LOADGEN_MEM="${LOADGEN_MEM:-4Gi}"
+LOADGEN_NODE="${LOADGEN_NODE:-}"
+VERIFY_EVERY="${VERIFY_EVERY:-1}"
+NODE_SELECTOR=""
+[ -n "$LOADGEN_NODE" ] && NODE_SELECTOR="nodeSelector: { kubernetes.io/hostname: \"${LOADGEN_NODE}\" }"
 
 # CTX is optional; if set we pass --context everywhere (kube context can flip
 # when Docker Desktop touches kube — pass it explicitly to be safe).
@@ -76,6 +84,7 @@ spec:
       labels: { app: stt-benchmark, component: loadgen }
     spec:
       restartPolicy: Never
+      ${NODE_SELECTOR}
       imagePullSecrets:
         - name: ghcr-pull-secret
       containers:
@@ -97,6 +106,7 @@ spec:
                 --ramp-up-secs ${RAMP} \
                 --session-start-spread-ms ${SPREAD} \
                 --repeat 1 \
+                --verify-every ${VERIFY_EVERY} \
                 --samples-out /results/${PREFIX}.samples.csv \
                 > /results/${PREFIX}.summary.json 2>/results/${PREFIX}.warn.log || true
               if [ -s /results/${PREFIX}.warn.log ]; then

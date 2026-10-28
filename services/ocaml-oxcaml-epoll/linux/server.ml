@@ -297,9 +297,13 @@ let enqueue_text (s : server) (c : conn) payload =
   update_conn s c
 ;;
 
+(* RFC 6455 5.5.1: no data frames after our Close frame. An inference result that lands
+   while the close is still queued is dropped. *)
 let enqueue_generated_text (s : server) (c : conn) write_payload =
-  out_add_text_generated c.output write_payload;
-  update_conn s c
+  if not c.close_after_write
+  then (
+    out_add_text_generated c.output write_payload;
+    update_conn s c)
 ;;
 
 let enqueue_partial (s : server) (c : conn) partial =
@@ -465,6 +469,10 @@ let rec process_frames (s : server) (c : conn) =
     | Ok (Some (frame, next)) ->
       consume_input c next;
       (match frame.opcode with
+       | (Ws.Text | Ws.Binary) when not frame.fin ->
+         (* Fragmentation is outside the benchmark protocol; accepting the first fragment
+            would admit a message whose total size is not one start/640-byte frame. *)
+         enqueue_close s c 1002
        | Ws.Text when not c.started ->
          (match P.start_message_ok frame.payload with
           | Ok () ->
@@ -851,6 +859,10 @@ let drive_slot (s : server) (slot : slot) =
 let submit_inference (s : server) (c : conn) (p : pending) =
   match Int_stack.pop s.free_slots with
   | None ->
+    (* The error frame reports [p]'s range as consumed, so drain the batch exactly like a
+       submitted one; otherwise the next flush re-sends these frames (overlap). *)
+    clear c.pcm;
+    clear_batch c;
     deliver_error
       s
       c
@@ -881,7 +893,7 @@ let submit_inference (s : server) (c : conn) (p : pending) =
 ;;
 
 let flush_conn (s : server) (c : conn) now =
-  if c.closed
+  if c.closed || c.close_after_write
   then ()
   else (
     let expected = c.next_flush_ms in

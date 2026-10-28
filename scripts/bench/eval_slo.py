@@ -7,7 +7,7 @@
 #
 # Prints one line:
 #   <sessions> PASS|FAIL <reason> | partials=.. err=.. newest p50/p95 ...
-#     ... correctness_err=<n>/<m>verified[,<k>dropped]   (informational, not a gate)
+#     ... correctness_err=<n>/<m>verified[,<k>dropped]   (n>0 fails the point)
 # Exits 0 always (the driver brackets on the printed verdict, not exit code).
 import sys, json
 
@@ -32,8 +32,11 @@ errs = (
 )
 erate = (errs / p) if p else 1.0
 # Correctness (continuity + expected stub values, see loadgen/rust/src/verify.rs)
-# is REPORTED ONLY, not gated: it is absent from `errs` and from the verdict.
-# Summaries from older loadgens lack the field and print "n/a".
+# IS a gate: a gateway that returns wrong, dropped or misattributed results has
+# no valid capacity number. Summaries from loadgens that predate verification
+# lack the field and fail with "no-correctness-data". `verify_dropped` (values
+# the verifier thread couldn't keep up with) is reported, not gated; continuity
+# is still checked for those partials.
 cerr = d.get("correctness_errors")
 cver = d.get("verified_partials")
 cdrop = d.get("verify_dropped")
@@ -55,6 +58,10 @@ if erate > 1e-5:
     gates.append(f"err_rate={erate:.2e}>1e-5 ({errs}/{p})")
 if p == 0:
     gates.append("zero-partials")
+if cerr is None:
+    gates.append("no-correctness-data")
+elif cerr > 0:
+    gates.append(f"correctness_errors={cerr}")
 verdict = "PASS" if not gates else "FAIL"
 print(
     f"{sess} {verdict} {';'.join(gates) if gates else 'ok'} | "

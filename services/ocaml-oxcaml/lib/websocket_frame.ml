@@ -66,7 +66,9 @@ let parse_extended_length reader ~base_len =
     | None -> return None
     | Some b ->
       let full = Stdlib.Bytes.get_int64_be b 0 in
-      if Int64.( > ) full (Int64.of_int (1 lsl 30))
+      (* RFC 6455 §5.2: the most significant bit MUST be 0. [get_int64_be] is signed, so a
+         set MSB reads as negative and would otherwise reach [Bytes.create] and raise. *)
+      if Int64.( < ) full 0L || Int64.( > ) full (Int64.of_int (1 lsl 30))
       then return None
       else return (Some (Int64.to_int_exn full)))
 ;;
@@ -90,6 +92,9 @@ let read reader =
     let opcode = opcode_of_int (byte0 land 0x0F) in
     (match%bind read_byte reader with
      | None -> return `Eof
+     | Some _ when byte0 land 0x70 <> 0 ->
+       (* RFC 6455 §5.2: RSV1-3 MUST be 0 unless an extension was negotiated (none is). *)
+       return (`Error "reserved bits set")
      | Some byte1 ->
        let masked = byte1 land 0x80 <> 0 in
        let base_len = byte1 land 0x7F in
@@ -151,7 +156,9 @@ let write writer (t : t) =
   in
   Writer.write_bytes writer header;
   Writer.write writer t.payload;
-  Writer.flushed writer
+  (* Not [Writer.flushed]: that never becomes determined once the peer has gone
+     (EPIPE/ECONNRESET), which would wedge the writer/receive loops and leak the session. *)
+  Writer.flushed_or_failed_unit writer
 ;;
 
 let text payload = { fin = true; opcode = Text; payload }
@@ -162,4 +169,16 @@ let close ?(code = 1000) () =
   let payload = Bytes.create 2 in
   Stdlib.Bytes.set_uint16_be payload 0 code;
   { fin = true; opcode = Close; payload = Bytes.to_string payload }
+;;
+
+(* RFC 6455 §5.5.1 / §7.4: a Close body is empty or a 2-byte code (+ optional reason). A
+   1-byte body, or a code that must never appear on the wire, is a protocol error. *)
+let valid_close_payload payload =
+  match String.length payload with
+  | 0 -> true
+  | 1 -> false
+  | _ ->
+    let code = (Char.to_int payload.[0] lsl 8) lor Char.to_int payload.[1] in
+    (code >= 1000 && code <= 1014 && not (code >= 1004 && code <= 1006))
+    || (code >= 3000 && code <= 4999)
 ;;

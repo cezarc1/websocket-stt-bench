@@ -25,15 +25,10 @@ namespace stt {
 struct Frame {
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
     Frame(std::uint64_t seq_in, std::span<const std::byte, FRAME_BYTES> bytes,
-          std::chrono::steady_clock::time_point at) noexcept {
-        assign(seq_in, bytes, at);
-    }
-
-    void assign(std::uint64_t seq_in, std::span<const std::byte, FRAME_BYTES> bytes,
-                std::chrono::steady_clock::time_point at) noexcept {
-        seq = seq_in;
+          std::chrono::steady_clock::time_point at) noexcept
+        : seq(seq_in),
+          received_at(at) {
         std::memcpy(payload.data(), bytes.data(), FRAME_BYTES);
-        received_at = at;
     }
 
     std::uint64_t seq;
@@ -123,7 +118,6 @@ public:
     bool closed() const noexcept { return state_ == State::Closed; }
     bool inflight() const noexcept { return inflight_; }
     std::size_t buffer_size() const noexcept { return buffer_.size(); }
-    std::uint64_t dropped_frames() const noexcept { return dropped_frames_; }
     std::optional<std::chrono::steady_clock::time_point> expected_next_flush() const noexcept {
         return expected_next_flush_;
     }
@@ -138,10 +132,6 @@ private:
 
     void fail_protocol(int code, std::string_view reason);
     void submit_inference(const BatchContext& ctx, std::vector<std::byte> body);
-    const Frame& oldest_frame() const noexcept { return buffer_[head_]; }
-    const Frame& newest_frame() const noexcept {
-        return buffer_[(head_ + buffer_.size() - 1) % buffer_.size()];
-    }
 
     const Config& config_;
     InferenceClient& inference_;
@@ -151,13 +141,10 @@ private:
     State state_ = State::Pending;
     bool inflight_ = false;
     std::uint64_t seq_ = 0;
-    std::uint64_t dropped_frames_ = 0;
-    // Ring buffer, oldest frame at `head_`. It grows on demand up to
-    // MAX_BUFFERED_FRAMES (same footprint as a plain vector); once full, the
-    // oldest slot is overwritten in place and `head_` advances, so dropping a
-    // frame is O(1) instead of shifting ~100 KB. `head_` is 0 until full.
+    // Frames since the last flush, in seq order. Never trimmed: dropping a
+    // frame would break per-session seq continuity and flatter oldest-frame
+    // latency. `clear()` keeps the capacity warm across flushes.
     std::vector<Frame> buffer_;
-    std::size_t head_ = 0;
     std::optional<std::chrono::steady_clock::time_point> expected_next_flush_;
 
     // Scratch buffers reused across flushes. Per-session ownership keeps each

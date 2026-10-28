@@ -129,10 +129,10 @@ fn main() -> io::Result<()> {
                 ),
                 Source::Result => {
                     // One wake coalesces N completions; drain them all.
-                    while let Ok((owner, result)) = done_rx.try_recv() {
+                    while let Ok((owner, tag, result)) = done_rx.try_recv() {
                         if let Some(conn) = conns.get_mut(&owner)
                             && matches!(
-                                conn.deliver(poll.registry(), result, &config),
+                                conn.on_done(poll.registry(), tag, result, &config),
                                 Outcome::Close
                             )
                         {
@@ -142,12 +142,9 @@ fn main() -> io::Result<()> {
                 }
                 Source::Ws(id) => {
                     if let Some(conn) = conns.get_mut(&id) {
-                        let reg = poll.registry();
-                        let outcome = if event.is_writable() {
-                            conn.on_writable(reg)
-                        } else {
-                            conn.on_readable(reg)
-                        };
+                        let readable =
+                            event.is_readable() || event.is_read_closed() || event.is_error();
+                        let outcome = conn.on_ready(poll.registry(), readable, event.is_writable());
                         if matches!(outcome, Outcome::Close) {
                             closing.push(id);
                         }
@@ -170,7 +167,7 @@ fn main() -> io::Result<()> {
                     // One owned body buffer handed off per flush — the
                     // same shape as C++'s moved `body_scratch_`; `Conn`
                     // keeps its own buffer warm for the next batch.
-                    infer.submit(id, conn.pcm().to_vec(), config.cpu_passes);
+                    infer.submit(id, batch.tag(), conn.pcm().to_vec(), config.cpu_passes);
                     conn.begin_pending(batch, now);
                     timers.push(Reverse((conn.deadline(), id)));
                 }
@@ -184,7 +181,7 @@ fn main() -> io::Result<()> {
                         Outcome::Close
                     );
                     // Tell B to reclaim the slot; a late `Done` afterwards
-                    // is harmless (`deliver` no-ops with no `pending`).
+                    // is harmless (`on_done` drops a stale tag).
                     infer.abort(id);
                     if close {
                         closing.push(id);

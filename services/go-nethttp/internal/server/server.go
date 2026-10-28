@@ -48,7 +48,7 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 		log.Printf("websocket accept: %v", err)
 		return
 	}
-	conn.SetReadLimit(8 * 1024)
+	conn.SetReadLimit(session.MaxMessageBytes)
 
 	core := session.NewCore(session.Config{
 		CPUPasses:    s.config.CPUPasses,

@@ -42,6 +42,21 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
+function prediction(audioBytes: number): Awaited<ReturnType<InferenceRunner>> {
+  return {
+    rms: 1,
+    zero_crossings: 1,
+    checksum: 1,
+    samples: audioBytes / 2,
+    transcript: "now",
+    audio_bytes: audioBytes,
+  };
+}
+
+function unexpectedInference(): Promise<never> {
+  return Promise.reject(new Error("unexpected"));
+}
+
 describe("SttSession", () => {
   test("closes with 1002 when the first message is not start", () => {
     const socket = new FakeSocket();
@@ -166,6 +181,115 @@ describe("SttSession", () => {
     });
   });
 
+  test.each([
+    ["non-JSON text", "not-json"],
+    ["wrong type", '{"type":"stop"}'],
+    ["binary frame before start", new Uint8Array(FRAME_BYTES)],
+  ])("closes with 1002 on invalid first message: %s", (_label, first) => {
+    const socket = new FakeSocket();
+    const session = new SttSession(socket, { inference: unexpectedInference, timers: false });
+
+    session.handleMessage(first);
+    session.handleMessage('{"type":"start"}');
+
+    expect(socket.closes).toEqual([{ code: 1002, reason: "first message must be start" }]);
+  });
+
+  test.each([
+    0,
+    10,
+    FRAME_BYTES - 1,
+    FRAME_BYTES + 1,
+  ])("closes with 1003 on a %i byte binary frame and drops the buffered batch", async (size) => {
+    const socket = new FakeSocket();
+    const session = new SttSession(socket, { inference: unexpectedInference, timers: false });
+
+    session.handleMessage('{"type":"start"}');
+    session.handleMessage(frame(1));
+    session.handleMessage(new Uint8Array(size));
+    await session.flushOnceForTest(0);
+
+    expect(socket.closes).toEqual([{ code: 1003, reason: "expected 640 byte PCM frame" }]);
+    expect(socket.sent).toHaveLength(0);
+  });
+
+  test("tiles seq ranges across partials and error frames with frames sent in order", async () => {
+    const socket = new FakeSocket();
+    const bodies: Uint8Array[] = [];
+    let call = 0;
+    const inference: InferenceRunner = async (body) => {
+      bodies.push(body.slice());
+      call += 1;
+      if (call === 2) {
+        throw new Error("connection reset");
+      }
+      return prediction(body.byteLength);
+    };
+    const session = new SttSession(socket, { inference, timers: false });
+
+    session.handleMessage('{"type":"start"}');
+    let fill = 0;
+    for (const batchSize of [2, 3, 1]) {
+      for (let i = 0; i < batchSize; i++) {
+        fill += 1;
+        session.handleMessage(frame(fill));
+      }
+      // biome-ignore lint/performance/noAwaitInLoops: each flush must finish before the next batch
+      await session.flushOnceForTest(0); // oxlint-disable-line no-await-in-loop
+    }
+
+    const messages = socket.sent.map((m) => JSON.parse(m));
+    expect(messages.map((m) => [m.type, m.oldest_frame_seq, m.newest_frame_seq, m.frames])).toEqual(
+      [
+        ["partial", 1, 2, 2],
+        ["error", 3, 5, 3],
+        ["partial", 6, 6, 1],
+      ],
+    );
+    expect(messages.map((m) => m.audio_bytes)).toEqual([2, 3, 1].map((n) => n * FRAME_BYTES));
+    expect(bodies.map((b) => [...new Set(b)])).toEqual([[1, 2], [3, 4, 5], [6]]);
+    for (const body of bodies) {
+      for (let i = 0; i < body.byteLength; i += FRAME_BYTES) {
+        expect(body.subarray(i, i + FRAME_BYTES).every((byte) => byte === body[i])).toBe(true);
+      }
+    }
+  });
+
+  test("timer-driven flushes never overlap an in-flight inference request", async () => {
+    const socket = new FakeSocket();
+    let active = 0;
+    let maxActive = 0;
+    let calls = 0;
+    const inference: InferenceRunner = async (body) => {
+      active += 1;
+      calls += 1;
+      maxActive = Math.max(maxActive, active);
+      await Bun.sleep(25);
+      active -= 1;
+      return prediction(body.byteLength);
+    };
+    const session = new SttSession(socket, { inference, flushIntervalMs: 2 });
+
+    session.handleMessage('{"type":"start"}');
+    for (let i = 1; i <= 20; i++) {
+      session.handleMessage(frame(i));
+      // biome-ignore lint/performance/noAwaitInLoops: paced frame stream
+      await Bun.sleep(3); // oxlint-disable-line no-await-in-loop
+    }
+    await Bun.sleep(60);
+    session.close();
+
+    expect(calls).toBeGreaterThan(1);
+    expect(maxActive).toBe(1);
+    const ranges = socket.sent.map((m) => JSON.parse(m));
+    let prevNewest = 0;
+    for (const m of ranges) {
+      expect(m.oldest_frame_seq).toBe(prevNewest + 1);
+      prevNewest = m.newest_frame_seq;
+    }
+    expect(prevNewest).toBe(20);
+  });
+
   test("aborts inflight inference on close and drops the would-be partial", async () => {
     const socket = new FakeSocket();
     const gate = deferred<Awaited<ReturnType<InferenceRunner>>>();
@@ -229,5 +353,18 @@ describe("BoundedOutbox", () => {
 
     expect(fifthDone).toBe(true);
     expect(socket.sent).toEqual(["one", "two", "three", "four", "five"]);
+  });
+
+  test("closes the socket with 1011 instead of silently dropping when Bun drops a send", async () => {
+    const socket = new FakeSocket();
+    socket.nextSendStatus = 0;
+    const outbox = new BoundedOutbox(socket, 4);
+
+    await outbox.enqueue("one");
+    socket.nextSendStatus = null;
+    await outbox.enqueue("two");
+
+    expect(socket.sent).toEqual(["one"]);
+    expect(socket.closes).toEqual([{ code: 1011, reason: "outbound message dropped" }]);
   });
 });

@@ -324,7 +324,7 @@ async fn invalid_start_closes(target: &ServiceTarget) -> anyhow::Result<()> {
 
 /// "Invalid binary frame sizes close with code 1003."
 async fn invalid_frame_closes(target: &ServiceTarget) -> anyhow::Result<()> {
-    for size in [0, 10, FRAME_BYTES - 1, FRAME_BYTES + 1] {
+    for size in [0, 10, FRAME_BYTES - 1, FRAME_BYTES + 1, 8_193, 65_536] {
         let mut socket = connect(target).await?;
         send_start(&mut socket).await?;
         socket

@@ -8,11 +8,13 @@ import {
 } from "./config.ts";
 import { InferenceError, type InferenceRunner } from "./inference.ts";
 import {
+  CLOSE_INTERNAL_ERROR,
   CLOSE_PROTOCOL_ERROR,
   CLOSE_UNSUPPORTED_DATA,
   FRAME_BYTES,
   REASON_BAD_FRAME_SIZE,
   REASON_NEED_START,
+  REASON_SEND_DROPPED,
   REASON_TEXT_AFTER_START,
   buildErrorMessage,
   buildPartialMessage,
@@ -280,7 +282,11 @@ export class BoundedOutbox {
       }
       const status = this.socket.send(next);
       if (status === 0) {
+        // Bun dropped the message. Continuing would leave a silent seq gap
+        // for the client, so end the connection explicitly instead; Bun's
+        // close handler then tears the session down.
         this.close();
+        this.socket.close(CLOSE_INTERNAL_ERROR, REASON_SEND_DROPPED);
         return;
       }
       this.queue.shift();

@@ -62,7 +62,10 @@ let parse_extended_length reader ~base_len =
     | None -> return None
     | Some b ->
       let full = Stdlib.Bytes.get_int64_be b 0 in
-      if Int64.( > ) full (Int64.of_int (1 lsl 30))
+      (* RFC 6455 §5.2: the most significant bit MUST be 0. [get_int64_be] is signed, so
+         such a length reads negative and must be rejected here, not handed to
+         [Bytes.create]. *)
+      if Int64.( < ) full 0L || Int64.( > ) full (Int64.of_int (1 lsl 30))
       then return None
       else return (Some (Int64.to_int_exn full)))
 ;;
@@ -87,7 +90,10 @@ let read reader =
      | Some byte1 ->
        let masked = byte1 land 0x80 <> 0 in
        let base_len = byte1 land 0x7F in
-       if not masked
+       (* RFC 6455 §5.2: no extension is negotiated, so RSV1-3 must be zero. *)
+       if byte0 land 0x70 <> 0
+       then return (`Error "reserved bits set")
+       else if not masked
        then return (`Error "client frame not masked")
        else (
          match%bind parse_extended_length reader ~base_len with
@@ -136,7 +142,9 @@ let write writer (t : t) =
   in
   Writer.write_bytes writer header;
   Writer.write writer t.payload;
-  Writer.flushed writer
+  (* Not [Writer.flushed]: that never becomes determined once the peer has gone
+     (EPIPE/ECONNRESET), which would wedge the writer/receive loops and leak the session. *)
+  Writer.flushed_or_failed_unit writer
 ;;
 
 let text payload = { fin = true; opcode = Text; payload }
