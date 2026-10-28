@@ -226,20 +226,25 @@ InferenceResult finish_easy(CURL* easy, EasyState& state, CURLcode code) {
     return parsed;
 }
 
+// Every completion goes through here so the request body always travels back
+// with the result, whatever the outcome, and the caller can reuse its capacity.
+void complete(CurlInferenceClient::Request& request, InferenceResult result) {
+    request.on_complete(std::move(result), std::move(request.body));
+}
+
 void submit_one(CURLM* multi, const std::string& url, std::chrono::milliseconds timeout,
                 ActiveList& active, IdlePool& idle, CurlInferenceClient::Request request) {
     std::unique_ptr<EasyState> state;
     try {
         state = idle.acquire();
     } catch (const std::runtime_error& ex) {
-        request.on_complete(std::unexpected(InferenceFailure{
-                                .stage = ErrorStage::InferenceRequest,
-                                .kind = ErrorKind::ConnectionReset,
-                                .detail = ex.what(),
-                                .status = std::nullopt,
-                                .retryable = true,
-                            }),
-                            std::move(request.body));
+        complete(request, std::unexpected(InferenceFailure{
+                              .stage = ErrorStage::InferenceRequest,
+                              .kind = ErrorKind::ConnectionReset,
+                              .detail = ex.what(),
+                              .status = std::nullopt,
+                              .retryable = true,
+                          }));
         return;
     }
 
@@ -250,8 +255,7 @@ void submit_one(CURLM* multi, const std::string& url, std::chrono::milliseconds 
 
     const CURLMcode add_code = curl_multi_add_handle(multi, easy);
     if (add_code != CURLM_OK) {
-        state->request.on_complete(std::unexpected(classify_multi(add_code)),
-                                   std::move(state->request.body));
+        complete(state->request, std::unexpected(classify_multi(add_code)));
         idle.recycle(std::move(state));
         return;
     }
@@ -280,7 +284,7 @@ void harvest_completions(CURLM* multi, ActiveList& active, IdlePool& idle) {
         active.erase(it);
         curl_multi_remove_handle(multi, easy);
         auto result = finish_easy(easy, *state, message->data.result);
-        state->request.on_complete(std::move(result), std::move(state->request.body));
+        complete(state->request, std::move(result));
         idle.recycle(std::move(state));
     }
 }
@@ -289,7 +293,7 @@ void fail_active(CURLM* multi, ActiveList& active, IdlePool& idle,
                  const InferenceFailure& failure) {
     for (auto& [easy, state] : active) {
         curl_multi_remove_handle(multi, easy);
-        state->request.on_complete(std::unexpected(failure), std::move(state->request.body));
+        complete(state->request, std::unexpected(failure));
         idle.recycle(std::move(state));
     }
     active.clear();
