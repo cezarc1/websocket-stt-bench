@@ -2,7 +2,9 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -17,12 +19,23 @@
 
 namespace stt {
 
-// No default member initialisers: on_binary() overwrites every field right
-// after emplace_back(), and the struct stays trivial so the intent (no 640-byte
-// zero-fill per frame) remains expressible. Note emplace_back() with no args
-// value-initialises, which still zero-fills unless the optimiser drops the
-// dead store before the memcpy.
-struct Frame {  // NOLINT(cppcoreguidelines-pro-type-member-init)
+// The user-provided constructor default-initialises `payload` (left
+// indeterminate) and fills it with one memcpy, so buffering a frame never pays
+// the 640-byte zero-fill that `emplace_back()` value-initialisation would.
+struct Frame {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
+    Frame(std::uint64_t seq_in, std::span<const std::byte, FRAME_BYTES> bytes,
+          std::chrono::steady_clock::time_point at) noexcept {
+        assign(seq_in, bytes, at);
+    }
+
+    void assign(std::uint64_t seq_in, std::span<const std::byte, FRAME_BYTES> bytes,
+                std::chrono::steady_clock::time_point at) noexcept {
+        seq = seq_in;
+        std::memcpy(payload.data(), bytes.data(), FRAME_BYTES);
+        received_at = at;
+    }
+
     std::uint64_t seq;
     std::array<std::byte, FRAME_BYTES> payload;
     std::chrono::steady_clock::time_point received_at;
@@ -125,6 +138,10 @@ private:
 
     void fail_protocol(int code, std::string_view reason);
     void submit_inference(const BatchContext& ctx, std::vector<std::byte> body);
+    const Frame& oldest_frame() const noexcept { return buffer_[head_]; }
+    const Frame& newest_frame() const noexcept {
+        return buffer_[(head_ + buffer_.size() - 1) % buffer_.size()];
+    }
 
     const Config& config_;
     InferenceClient& inference_;
@@ -135,11 +152,18 @@ private:
     bool inflight_ = false;
     std::uint64_t seq_ = 0;
     std::uint64_t dropped_frames_ = 0;
+    // Ring buffer, oldest frame at `head_`. It grows on demand up to
+    // MAX_BUFFERED_FRAMES (same footprint as a plain vector); once full, the
+    // oldest slot is overwritten in place and `head_` advances, so dropping a
+    // frame is O(1) instead of shifting ~100 KB. `head_` is 0 until full.
     std::vector<Frame> buffer_;
+    std::size_t head_ = 0;
     std::optional<std::chrono::steady_clock::time_point> expected_next_flush_;
 
     // Scratch buffers reused across flushes. Per-session ownership keeps each
     // buffer warm at the typical batch size (50 frames of PCM, ~250 B of JSON).
+    // The body is handed to the inference client and comes back with the
+    // completion (one in flight per session), so its capacity survives.
     std::vector<std::byte> body_scratch_;
     std::string json_scratch_;
 };

@@ -1,6 +1,7 @@
 #include "session.hpp"
 
-#include <cstring>
+#include <cstddef>
+#include <ranges>
 #include <string>
 #include <utility>
 
@@ -63,17 +64,16 @@ void Session::on_binary(std::span<const std::byte> payload) {
         fail_protocol(CLOSE_UNSUPPORTED_DATA, REASON_BAD_FRAME_SIZE);
         return;
     }
-    if (buffer_.size() >= MAX_BUFFERED_FRAMES) {
-        buffer_.erase(buffer_.begin());
-        ++dropped_frames_;
+    const auto bytes = payload.first<FRAME_BYTES>();
+    const auto now = std::chrono::steady_clock::now();
+    if (buffer_.size() < MAX_BUFFERED_FRAMES) {
+        buffer_.emplace_back(++seq_, bytes, now);
+        return;
     }
-    // emplace_back() default-constructs Frame, leaving `payload` indeterminate;
-    // memcpy then fills it. Saves the 640-byte zero-fill from designated-init
-    // (≈96 MB/s of dead writes at the saturated 150k-frame/s rate).
-    Frame& frame = buffer_.emplace_back();
-    frame.seq = ++seq_;
-    std::memcpy(frame.payload.data(), payload.data(), FRAME_BYTES);
-    frame.received_at = std::chrono::steady_clock::now();
+    // Full (inference is backed up): overwrite the oldest frame in place.
+    buffer_[head_].assign(++seq_, bytes, now);
+    head_ = (head_ + 1) % buffer_.size();
+    ++dropped_frames_;
 }
 
 void Session::on_flush_tick(std::chrono::steady_clock::time_point now) {
@@ -91,16 +91,22 @@ void Session::on_flush_tick(std::chrono::steady_clock::time_point now) {
     }
     inflight_ = true;
 
-    // Build the body in the scratch vector — reused across flushes so capacity
-    // converges at ~50 frames of PCM (~32 KiB) and stays out of the allocator.
+    // Build the body in the scratch vector. Its capacity comes back with each
+    // completion, so it converges at ~50 frames of PCM (~32 KiB) and stays out
+    // of the allocator. Frames are appended oldest first: [head_, end) then
+    // [0, head_).
     body_scratch_.clear();
     body_scratch_.reserve(buffer_.size() * FRAME_BYTES);
-    for (const auto& frame : buffer_) {
+    const auto split = buffer_.begin() + static_cast<std::ptrdiff_t>(head_);
+    for (const auto& frame : std::ranges::subrange(split, buffer_.end())) {
+        body_scratch_.append_range(frame.payload);
+    }
+    for (const auto& frame : std::ranges::subrange(buffer_.begin(), split)) {
         body_scratch_.append_range(frame.payload);
     }
 
-    const auto& oldest = buffer_.front();
-    const auto& newest = buffer_.back();
+    const auto& oldest = oldest_frame();
+    const auto& newest = newest_frame();
     const BatchContext ctx{
         .oldest_seq = oldest.seq,
         .newest_seq = newest.seq,
@@ -114,6 +120,7 @@ void Session::on_flush_tick(std::chrono::steady_clock::time_point now) {
 
     auto body = std::move(body_scratch_);
     buffer_.clear();
+    head_ = 0;
 
     submit_inference(ctx, std::move(body));
 }
@@ -123,9 +130,13 @@ void Session::submit_inference(const BatchContext& ctx, std::vector<std::byte> b
         std::move(body), config_.cpu_passes,
         // `sched` is a shared_ptr copy so the post path survives Session
         // destruction between submission and completion.
-        [weak = weak_from_this(), ctx, sched = scheduler_](InferenceResult result) {
-            sched->post([weak, ctx, result = std::move(result)]() mutable {
+        [weak = weak_from_this(), ctx, sched = scheduler_](InferenceResult result,
+                                                           std::vector<std::byte> body) {
+            sched->post([weak, ctx, result = std::move(result), body = std::move(body)]() mutable {
                 if (auto self = weak.lock()) {
+                    // Only one request is in flight per session, so the
+                    // scratch is empty here; take the buffer back for reuse.
+                    self->body_scratch_ = std::move(body);
                     if (result) {
                         self->on_inference_succeeded(*result, ctx);
                     } else {
