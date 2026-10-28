@@ -40,7 +40,7 @@ func TestPCMFrameSize(t *testing.T) {
 func TestPartialMessageSerializesExactLoadgenSchema(t *testing.T) {
 	t.Parallel()
 
-	payload, err := MarshalPartialMessage(PartialMessage{
+	payload, err := MarshalPartialMessage(&PartialMessage{
 		Type:              PartialType,
 		OldestFrameSeq:    1,
 		NewestFrameSeq:    2,
@@ -85,7 +85,7 @@ func TestPartialMessageSerializesExactLoadgenSchema(t *testing.T) {
 func TestErrorMessageSerializesExactDiagnosticSchema(t *testing.T) {
 	t.Parallel()
 
-	payload, err := MarshalErrorMessage(ErrorMessage{
+	payload, err := MarshalErrorMessage(&ErrorMessage{
 		Type:                   ErrorType,
 		Stage:                  StageInferenceRequest,
 		Kind:                   KindTimeout,

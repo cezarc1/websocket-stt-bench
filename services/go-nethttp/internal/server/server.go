@@ -16,7 +16,7 @@ type Server struct {
 	runner session.Runner
 }
 
-func New(config config.Config, runner session.Runner) *Server {
+func New(config config.Config, runner session.Runner) *Server { //nolint:gocritic // hugeParam: called once at startup
 	return &Server{
 		config: config,
 		runner: runner,

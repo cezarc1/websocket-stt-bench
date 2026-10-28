@@ -538,6 +538,7 @@ fn scale_duration(duration: Duration, numerator: usize, denominator: usize) -> D
     Duration::from_nanos(nanos.min(u64::MAX as u128) as u64)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_inbound(
     session_id: usize,
     message: Option<Result<Message, WsError>>,

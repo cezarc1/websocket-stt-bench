@@ -9,6 +9,8 @@ export const DEFAULT_INFERENCE_URL = "http://inference-server:9000";
 export const DEFAULT_INFERENCE_TIMEOUT_MS = 2000;
 export const DEFAULT_PORT = 7000;
 
+const TRAILING_SLASHES = /\/+$/;
+
 export interface SessionConfig {
   readonly cpuPasses: number;
   readonly modelDelayMs: number;
@@ -28,7 +30,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     modelDelayMs: envInt(env, "MODEL_DELAY_MS", DEFAULT_MODEL_DELAY_MS),
     flushIntervalMs: Math.max(1, envInt(env, "FLUSH_INTERVAL_MS", DEFAULT_FLUSH_INTERVAL_MS)),
     flushPhaseJitterMs: envInt(env, "FLUSH_PHASE_JITTER_MS", DEFAULT_FLUSH_PHASE_JITTER_MS),
-    inferenceUrl: (env.INFERENCE_URL ?? DEFAULT_INFERENCE_URL).replace(/\/+$/, ""),
+    inferenceUrl: (env.INFERENCE_URL ?? DEFAULT_INFERENCE_URL).replace(TRAILING_SLASHES, ""),
     inferenceTimeoutMs: Math.max(
       1,
       envInt(env, "INFERENCE_TIMEOUT_MS", DEFAULT_INFERENCE_TIMEOUT_MS),

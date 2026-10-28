@@ -57,6 +57,7 @@ RUN --mount=type=cache,target=/home/opam/.opam/download-cache,uid=1000,gid=1000 
 
 WORKDIR /app
 COPY services/ocaml-oxcaml-epoll/dune-project ./dune-project
+COPY services/ocaml-oxcaml-epoll/dune ./dune
 COPY services/ocaml-oxcaml-epoll/stt_ocaml_oxcaml_epoll.opam ./stt_ocaml_oxcaml_epoll.opam
 COPY services/ocaml-oxcaml-epoll/.ocamlformat ./.ocamlformat
 COPY services/ocaml-oxcaml-epoll/lib ./lib

@@ -248,7 +248,9 @@ export class BoundedOutbox {
 
   public async enqueue(message: string): Promise<void> {
     while (!this.closed && this.occupiedSlots() >= this.depth) {
-      await new Promise<void>((resolve) => this.waiters.push(resolve));
+      // Intentionally sequential: each wake re-checks capacity before enqueueing.
+      // biome-ignore lint/performance/noAwaitInLoops: back-pressure waiter loop
+      await new Promise<void>((resolve) => this.waiters.push(resolve)); // oxlint-disable-line no-await-in-loop
     }
     if (this.closed) {
       return;
