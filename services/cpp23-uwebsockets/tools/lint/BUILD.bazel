@@ -1,0 +1,32 @@
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+# bazel_clang_tidy's `clang_tidy_executable` flag needs an executable target,
+# not the bare file toolchains_llvm exports; this wraps the hermetic LLVM
+# 21.1.8 clang-tidy. Wired via `build:tidy` in .bazelrc.
+sh_binary(
+    name = "clang_tidy",
+    srcs = ["@llvm_toolchain_llvm//:bin/clang-tidy"],
+    visibility = ["//visibility:public"],
+)
+
+# `clang-format --dry-run --Werror` over every C++ file we own, using the
+# hermetic LLVM 21.1.8 clang-format from toolchains_llvm and the package's
+# `.clang-format`. Runs as part of `bazel test //...`; cached until a source,
+# the style file, or the toolchain changes. To fix, run that clang-format
+# with -i (same --style=file:.clang-format) on the reported files.
+sh_test(
+    name = "clang_format_test",
+    size = "small",
+    srcs = ["clang_format_check.sh"],
+    args = [
+        "$(rootpath @llvm_toolchain_llvm//:bin/clang-format)",
+        "$(rootpath //:clang_format_config)",
+        "$(rootpaths //:cpp_sources)",
+    ],
+    data = [
+        "//:clang_format_config",
+        "//:cpp_sources",
+        "@llvm_toolchain_llvm//:bin/clang-format",
+    ],
+)

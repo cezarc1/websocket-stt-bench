@@ -61,7 +61,7 @@ final class SessionSpec extends FunSuite:
     val msg = Await.result(first, 2.seconds)
     val text = msg match
       case t: TextMessage.Strict => t.text
-      case other => fail(s"expected TextMessage.Strict, got $other")
+      case other => fail(s"expected TextMessage.Strict, got ${other.getClass.getName}")
     val node = parse(text).toOption.get.hcursor
     assertEquals(node.downField("type").as[String], Right("partial"))
     assertEquals(node.downField("oldest_frame_seq").as[Long], Right(1L))
@@ -119,7 +119,7 @@ final class SessionSpec extends FunSuite:
     val msg = Await.result(first, 2.seconds)
     val text = msg match
       case t: TextMessage.Strict => t.text
-      case other => fail(s"expected TextMessage.Strict, got $other")
+      case other => fail(s"expected TextMessage.Strict, got ${other.getClass.getName}")
     val node = parse(text).toOption.get.hcursor
     assertEquals(node.downField("type").as[String], Right("error"))
     assertEquals(node.downField("kind").as[String], Right("timeout"))

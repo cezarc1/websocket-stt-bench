@@ -1,26 +1,27 @@
 ---
+# Checked by `bazel test //tools/lint:clang_format_test` (part of
+# `just cpp-check`) with the hermetic LLVM 21.1.8 clang-format. Options were
+# chosen to match the existing hand-formatted tree with minimal churn.
 BasedOnStyle: LLVM
 Language: Cpp
-Standard: c++20
-ColumnLimit: 120
+Standard: Latest
+ColumnLimit: 100
 IndentWidth: 4
 TabWidth: 4
 UseTab: Never
 AccessModifierOffset: -4
 PointerAlignment: Left
 AlwaysBreakTemplateDeclarations: Yes
-AllowShortFunctionsOnASingleLine: Inline
+AllowShortFunctionsOnASingleLine: All
 AllowShortIfStatementsOnASingleLine: Never
 AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: true
+IndentCaseLabels: true
+SpacesBeforeTrailingComments: 2
+PackConstructorInitializers: CurrentLine
+BinPackParameters: true
 BreakBeforeBraces: Attach
 SpaceBeforeCpp11BracedList: false
-IncludeBlocks: Regroup
-IncludeCategories:
-  - Regex: '^<[a-z_]+>$'
-    Priority: 1
-  - Regex: '^<.*\.h(pp)?>$'
-    Priority: 2
-  - Regex: '^"stt/.*"$'
-    Priority: 4
-  - Regex: '.*'
-    Priority: 3
+# Preserve hand-grouped include blocks (doctest first in tests, then std,
+# then third-party, then ours) instead of regrouping them.
+IncludeBlocks: Preserve

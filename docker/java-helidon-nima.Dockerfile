@@ -25,11 +25,17 @@ RUN apt-get update \
 
 COPY --from=build /usr/local/lib/stt-java-helidon-nima.jar /usr/local/lib/stt-java-helidon-nima.jar
 
-# JEP 491 (delivered in JDK 24, inherited here) makes synchronized-vs-blocking
-# pins structurally impossible, so we don't enable -Djdk.tracePinnedThreads=full
-# by default — at high session counts even rare prints would flood stderr and
-# stall a carrier. Opt back in via `JAVA_OPTS=... -Djdk.tracePinnedThreads=full`
-# for dev/conformance diagnostics.
+# JEP 491 (delivered in JDK 24, inherited here) stops `synchronized` from pinning
+# a virtual thread to its carrier. Pins are still possible (native frames, class
+# initializers, symbolic-reference resolution), so no pin diagnostics run by default.
+# `-Djdk.tracePinnedThreads` was removed in JDK 24 and is ignored; use JFR's
+# `jdk.VirtualThreadPinned` event instead (dev/diagnostics only, not benchmarks):
+#   JAVA_OPTS="... -XX:StartFlightRecording=settings=profile,filename=/tmp/pinned.jfr"
+#   jfr print --events jdk.VirtualThreadPinned /tmp/pinned.jfr
+# (written on JVM exit; on SIGKILL use `jcmd <pid> JFR.dump filename=...` first)
+# The event is enabled with a 20 ms threshold in both the `default` and `profile`
+# settings; to catch shorter pins, override it inline:
+#   -XX:StartFlightRecording=settings=profile,jdk.VirtualThreadPinned#threshold=1ms,filename=/tmp/pinned.jfr
 # `-Xms == -Xmx` keeps ZGC from growing committed memory during ramp; `+AlwaysPreTouch`
 # pre-faults all heap pages at startup, eliminating first-touch page-fault spikes at the
 # 2600-session edge. Costs ~1s of warmup time; pays back in p99 stability.

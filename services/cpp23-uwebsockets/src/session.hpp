@@ -17,7 +17,12 @@
 
 namespace stt {
 
-struct Frame {
+// No default member initialisers: on_binary() overwrites every field right
+// after emplace_back(), and the struct stays trivial so the intent (no 640-byte
+// zero-fill per frame) remains expressible. Note emplace_back() with no args
+// value-initialises, which still zero-fills unless the optimiser drops the
+// dead store before the memcpy.
+struct Frame {  // NOLINT(cppcoreguidelines-pro-type-member-init)
     std::uint64_t seq;
     std::array<std::byte, FRAME_BYTES> payload;
     std::chrono::steady_clock::time_point received_at;
@@ -26,11 +31,11 @@ struct Frame {
 // Per-flush context captured at flush time; shared by success and error paths
 // via the inference callback.
 struct BatchContext {
-    std::uint64_t oldest_seq;
-    std::uint64_t newest_seq;
-    std::uint64_t frames;
-    std::uint64_t body_bytes;
-    double flush_lateness_ms;
+    std::uint64_t oldest_seq = 0;
+    std::uint64_t newest_seq = 0;
+    std::uint64_t frames = 0;
+    std::uint64_t body_bytes = 0;
+    double flush_lateness_ms = 0.0;
     std::chrono::steady_clock::time_point started_at;
     std::chrono::steady_clock::time_point oldest_received_at;
     std::chrono::steady_clock::time_point newest_received_at;
@@ -87,8 +92,8 @@ public:
     // callback can outlive the WS close, and owning the sink keeps it
     // alive — but inert via `mark_closed()` — so the callback's `send`
     // can never touch a freed socket.
-    Session(const Config& config, InferenceClient& inference,
-            std::shared_ptr<OutboundSink> sink, std::shared_ptr<Scheduler> scheduler);
+    Session(const Config& config, InferenceClient& inference, std::shared_ptr<OutboundSink> sink,
+            std::shared_ptr<Scheduler> scheduler);
 
     void on_text(std::string_view text);
     void on_binary(std::span<const std::byte> payload);
@@ -98,7 +103,7 @@ public:
 
     // Direct injection paths used by `session_test` to simulate inference
     // completion without spinning up libcurl.
-    void on_inference_succeeded(InferResponse infer, const BatchContext& ctx);
+    void on_inference_succeeded(const InferResponse& infer, const BatchContext& ctx);
     void on_inference_failed(InferenceFailure err, const BatchContext& ctx);
 
     bool started() const noexcept { return state_ == State::Started; }

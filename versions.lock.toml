@@ -83,11 +83,15 @@ jdk = "25"
 helidon = "4.3.0"
 jackson = "2.18.2"
 junit = "5.11.4"
-errorprone = "2.36.0"
-nullaway = "0.12.2"
+errorprone = "2.51.0"
+nullaway = "0.14.3"
 jspecify = "1.0.0"
 spotless = "3.4.0"
 palantir_java_format = "2.90.0"
+spotbugs_maven_plugin = "4.10.5.0"
+spotbugs = "4.10.5"
+maven_pmd_plugin = "3.28.0"
+pmd = "7.28.0"
 
 [containers.java]
 maven_temurin_25_noble = "maven:3.9.11-eclipse-temurin-25-noble@sha256:407c4423cec0cf2981055bc2c6c0dc211d9605b6669279b95997f2d1c7e91e2c"
@@ -122,6 +126,12 @@ usockets = "0.8.8"
 curl = "8.12.0.bcr.1"
 glaze = "7.6.0"
 doctest = "2.5.2"
+
+[cpp.dev_dependencies]
+# Lint-only (MODULE.bazel dev_dependency); clang-tidy/clang-format themselves
+# come from the LLVM [cpp].clang release above via toolchains_llvm.
+bazel_clang_tidy = "c4d35e0d0b838309358e57a2efed831780f85cd0"  # erenon/bazel_clang_tidy, git_override
+rules_shell = "0.6.1"
 
 [containers.cpp]
 # Build + runtime base. Pin to a digest before pushing the gateway to CI.

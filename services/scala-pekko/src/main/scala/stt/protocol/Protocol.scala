@@ -53,7 +53,7 @@ object StartMessage:
     val expected = Set("type")
     c.keys match
       case Some(keys) if keys.toSet != expected =>
-        Left(DecodingFailure(s"unknown fields: ${keys.toSet -- expected}", c.history))
+        Left(DecodingFailure(s"unknown fields: ${(keys.toSet -- expected).mkString(", ")}", c.history))
       case _ =>
         c.downField("type").as[String].flatMap { tpe =>
           if tpe == "start" then Right(StartMessage(tpe))
@@ -79,7 +79,7 @@ object InferResponse:
   given Decoder[InferResponse] = Decoder.instance { c =>
     c.keys match
       case Some(keys) if keys.toSet != expectedFields =>
-        Left(DecodingFailure(s"unknown fields: ${keys.toSet -- expectedFields}", c.history))
+        Left(DecodingFailure(s"unknown fields: ${(keys.toSet -- expectedFields).mkString(", ")}", c.history))
       case _ =>
         for
           rms <- c.downField("rms").as[Double]

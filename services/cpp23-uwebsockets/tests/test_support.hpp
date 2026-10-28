@@ -70,7 +70,8 @@ inline std::array<std::byte, FRAME_BYTES> frame_of(unsigned char fill) {
     return bytes;
 }
 
-inline std::span<const std::byte> as_span(const std::array<std::byte, FRAME_BYTES>& frame) noexcept {
+inline std::span<const std::byte>
+as_span(const std::array<std::byte, FRAME_BYTES>& frame) noexcept {
     return {frame.data(), frame.size()};
 }
 

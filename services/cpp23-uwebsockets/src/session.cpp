@@ -127,7 +127,7 @@ void Session::submit_inference(const BatchContext& ctx, std::vector<std::byte> b
             sched->post([weak, ctx, result = std::move(result)]() mutable {
                 if (auto self = weak.lock()) {
                     if (result) {
-                        self->on_inference_succeeded(std::move(*result), ctx);
+                        self->on_inference_succeeded(*result, ctx);
                     } else {
                         self->on_inference_failed(std::move(result.error()), ctx);
                     }
@@ -136,7 +136,7 @@ void Session::submit_inference(const BatchContext& ctx, std::vector<std::byte> b
         });
 }
 
-void Session::on_inference_succeeded(InferResponse infer, const BatchContext& ctx) {
+void Session::on_inference_succeeded(const InferResponse& infer, const BatchContext& ctx) {
     inflight_ = false;
     if (state_ == State::Closed) {
         return;

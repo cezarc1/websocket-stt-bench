@@ -17,7 +17,8 @@ inline constexpr std::string_view RUNTIME_NAME = "cpp23-uwebsockets";
 inline constexpr int CLOSE_PROTOCOL_ERROR = 1002;
 inline constexpr int CLOSE_UNSUPPORTED_DATA = 1003;
 inline constexpr std::string_view REASON_NEED_START = "first message must be start";
-inline constexpr std::string_view REASON_TEXT_AFTER_START = "expected binary PCM frames after start";
+inline constexpr std::string_view REASON_TEXT_AFTER_START =
+    "expected binary PCM frames after start";
 inline constexpr std::string_view REASON_BAD_FRAME_SIZE = "expected 640 byte PCM frame";
 
 struct Config {

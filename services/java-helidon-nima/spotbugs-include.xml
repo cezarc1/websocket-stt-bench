@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Restrict SpotBugs to the PERFORMANCE category: this gate is about hot-path
+     cost, not general bug-finding (Error Prone + NullAway already cover that). -->
+<FindBugsFilter
+    xmlns="https://github.com/spotbugs/filter/3.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="https://github.com/spotbugs/filter/3.0.0 https://raw.githubusercontent.com/spotbugs/spotbugs/4.10.5/spotbugs/etc/findbugsfilter.xsd">
+    <Match>
+        <Bug category="PERFORMANCE"/>
+    </Match>
+</FindBugsFilter>

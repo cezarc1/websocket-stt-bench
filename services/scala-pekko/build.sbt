@@ -26,7 +26,10 @@ lazy val root = (project in file("."))
       "-Werror",
       "-Wunused:all",
       "-Wvalue-discard",
-      "-Wnonunit-statement"
+      "-Wnonunit-statement",
+      "-Wall",
+      // Spelled -Wsafe-init from Scala 3.5; 3.3.x rejects that name.
+      "-Ysafe-init"
     ),
     // scalafix needs SemanticDB.
     semanticdbEnabled := true,

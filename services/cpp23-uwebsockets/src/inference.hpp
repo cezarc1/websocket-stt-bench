@@ -56,8 +56,7 @@ public:
     InferenceClient& operator=(InferenceClient&&) = delete;
     virtual ~InferenceClient() = default;
 
-    virtual void infer_async(std::vector<std::byte> body,
-                             int cpu_passes,
+    virtual void infer_async(std::vector<std::byte> body, int cpu_passes,
                              std::function<void(InferenceResult)> on_complete) = 0;
 };
 
@@ -71,15 +70,14 @@ public:
     // name it; not part of the user-facing API.
     struct Request {
         std::vector<std::byte> body;
-        int cpu_passes;
+        int cpu_passes = 0;
         std::function<void(InferenceResult)> on_complete;
     };
 
     CurlInferenceClient(std::string base_url, std::chrono::milliseconds timeout, int client_count);
     ~CurlInferenceClient() override;
 
-    void infer_async(std::vector<std::byte> body,
-                     int cpu_passes,
+    void infer_async(std::vector<std::byte> body, int cpu_passes,
                      std::function<void(InferenceResult)> on_complete) override;
 
 private:

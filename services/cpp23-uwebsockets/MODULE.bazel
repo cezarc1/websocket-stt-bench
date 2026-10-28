@@ -20,7 +20,10 @@ bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "toolchains_llvm", version = "1.7.0")
 llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
 llvm.toolchain(llvm_version = "21.1.8")
-use_repo(llvm, "llvm_toolchain")
+# `llvm_toolchain_llvm` is the unpacked LLVM 21.1.8 release; the lint configs
+# in .bazelrc / tools/lint take clang-tidy and clang-format from it so the
+# linters are the same hermetic build as the compiler.
+use_repo(llvm, "llvm_toolchain", "llvm_toolchain_llvm")
 register_toolchains("@llvm_toolchain//:all")
 
 # Unit tests: doctest is on the BCR. Slightly older than the upstream pin in
@@ -77,3 +80,15 @@ git_override(
     remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
     commit = "abb61a688167623088f8768cc9264798df6a9d10",
 )
+
+# clang-tidy as a Bazel aspect (`bazel build --config=tidy //...`). Not on the
+# BCR, so pinned by commit. Dev-only: the production image never loads it.
+bazel_dep(name = "bazel_clang_tidy", dev_dependency = True)
+git_override(
+    module_name = "bazel_clang_tidy",
+    remote = "https://github.com/erenon/bazel_clang_tidy.git",
+    commit = "c4d35e0d0b838309358e57a2efed831780f85cd0",
+)
+
+# sh_test for the clang-format gate in tools/lint (Bazel 9 dropped native sh_*).
+bazel_dep(name = "rules_shell", version = "0.6.1", dev_dependency = True)

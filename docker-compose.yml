@@ -151,9 +151,9 @@ x-java-env: &java-env
   FLUSH_PHASE_JITTER_MS: "1000"
   PORT: "5000"
   INFERENCE_URL: "http://inference-server:9000"
-  # Override the Dockerfile default to drop -Djdk.tracePinnedThreads=full for
-  # load-test runs. JEP 491 (JDK 24) means pin events should be rare; the
-  # safety-net flag is left on in dev/conformance only, not in benchmarks.
+  # Benchmark JVM flags; no pin diagnostics. `-Djdk.tracePinnedThreads` was
+  # removed in JDK 24; to investigate pinning in dev, add JFR's
+  # jdk.VirtualThreadPinned event (recipe in docker/java-helidon-nima.Dockerfile).
   JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
 
 x-scala-env: &scala-env
