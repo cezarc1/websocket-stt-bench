@@ -47,6 +47,8 @@ inference:
   name: stt-inference-server
   # Pin pods to nodes, e.g. {kubernetes.io/hostname: 2080}. Empty = scheduler's choice.
   nodeSelector: {}
+  # Deployment update strategy, e.g. {type: Recreate}. Empty = Kubernetes default.
+  strategy: {}
   image: inference-server
   replicas: 1
   port: 9000

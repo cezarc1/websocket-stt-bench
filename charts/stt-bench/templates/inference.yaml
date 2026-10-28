@@ -9,6 +9,10 @@ metadata:
     component: inference
 spec:
   replicas: {{ .Values.inference.replicas }}
+  {{- with .Values.inference.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       app: {{ .Values.inference.name }}
