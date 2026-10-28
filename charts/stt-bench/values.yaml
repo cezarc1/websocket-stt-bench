@@ -45,6 +45,8 @@ results:
 inference:
   enabled: true
   name: stt-inference-server
+  # Pin pods to nodes, e.g. {kubernetes.io/hostname: 2080}. Empty = scheduler's choice.
+  nodeSelector: {}
   image: inference-server
   replicas: 1
   port: 9000
@@ -70,6 +72,9 @@ inference:
     className: traefik
     host: ""
     path: /
+
+# Default nodeSelector for every gateway; a gateway's own `nodeSelector` overrides it.
+gatewayNodeSelector: {}
 
 gatewayCommonEnv:
   CPU_PASSES: "4"
@@ -409,6 +414,7 @@ gateways:
 loadgen:
   enabled: true
   image: loadgen
+  nodeSelector: {}
   ttlSecondsAfterFinished: 86400
   resources:
     requests:
@@ -518,6 +524,7 @@ loadgen:
 inferbench:
   enabled: true
   image: loadgen
+  nodeSelector: {}
   targetUrl: http://stt-inference-server.stt-bench.svc.cluster.local:9000/infer
   ttlSecondsAfterFinished: 86400
   resources:

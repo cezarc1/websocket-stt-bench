@@ -7,7 +7,9 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
+        mpsc::{SyncSender, TrySendError, sync_channel},
     },
+    thread::JoinHandle,
     time::Duration,
 };
 
@@ -16,8 +18,11 @@ use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use hdrhistogram::Histogram;
 use serde::Serialize;
-use stt_loadgen::protocol::{
-    ErrorMessage, FRAME_INTERVAL, ServerMessage, StartMessage, frame_payload,
+use stt_loadgen::{
+    protocol::{
+        ErrorMessage, FRAME_INTERVAL, PartialMessage, ServerMessage, StartMessage, frame_payload,
+    },
+    verify::{Continuity, ExpectedConfig, Mismatch, MismatchKind, verify_partial},
 };
 use tokio::{
     sync::mpsc,
@@ -63,6 +68,16 @@ struct Args {
     samples_out: Option<PathBuf>,
     #[arg(long)]
     service_name: Option<String>,
+    /// Recompute the expected stub output for every Nth measured partial per
+    /// session (1 = all, 0 = off). Continuity is always checked.
+    #[arg(long, default_value_t = 1)]
+    verify_every: u64,
+    /// `cpu_passes` every partial must echo (gateway `CPU_PASSES`).
+    #[arg(long, default_value_t = ExpectedConfig::default().cpu_passes)]
+    expect_cpu_passes: u32,
+    /// `model_delay_ms` every partial must echo (gateway `MODEL_DELAY_MS`).
+    #[arg(long, default_value_t = ExpectedConfig::default().model_delay_ms)]
+    expect_model_delay_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -194,6 +209,212 @@ impl From<&ErrorMessage> for InferenceErrorSample {
     }
 }
 
+const MAX_CORRECTNESS_ERROR_SAMPLES: usize = 5;
+const MAX_CORRECTNESS_WARNINGS: u64 = 20;
+
+/// Run-wide correctness accounting. Shared by all session tasks; the mutex is
+/// only taken when a response is wrong.
+#[derive(Debug)]
+struct Correctness {
+    expected: ExpectedConfig,
+    verify_every: u64,
+    /// Responses (partials or error frames) with at least one mismatch.
+    errors: AtomicU64,
+    /// Partials whose values were recomputed and compared.
+    verified: AtomicU64,
+    /// Partials selected for value verification that were not verified
+    /// because the verifier queue was full (continuity was still checked).
+    verify_dropped: AtomicU64,
+    details: Mutex<CorrectnessDetails>,
+}
+
+#[derive(Debug, Default)]
+struct CorrectnessDetails {
+    counts: BTreeMap<MismatchKind, u64>,
+    samples: Vec<CorrectnessErrorSample>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CorrectnessErrorSample {
+    session_id: usize,
+    message_type: &'static str,
+    oldest_frame_seq: u64,
+    newest_frame_seq: u64,
+    kind: &'static str,
+    detail: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CorrectnessErrorCount {
+    kind: &'static str,
+    count: u64,
+}
+
+impl Correctness {
+    fn new(expected: ExpectedConfig, verify_every: u64) -> Self {
+        Self {
+            expected,
+            verify_every,
+            errors: AtomicU64::new(0),
+            verified: AtomicU64::new(0),
+            verify_dropped: AtomicU64::new(0),
+            details: Mutex::new(CorrectnessDetails::default()),
+        }
+    }
+
+    fn record(
+        &self,
+        session_id: usize,
+        message_type: &'static str,
+        oldest: u64,
+        newest: u64,
+        mismatches: &[Mismatch],
+    ) {
+        let Some(first) = mismatches.first() else {
+            return;
+        };
+        let previous = self.errors.fetch_add(1, Ordering::Relaxed);
+        // A systematically broken gateway fails every partial; log only the
+        // first few (the summary JSON carries counts and samples).
+        if previous < MAX_CORRECTNESS_WARNINGS {
+            warn!(
+                session_id,
+                oldest, newest, message_type, "incorrect response: {first}"
+            );
+        }
+        let mut details = self
+            .details
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for mismatch in mismatches {
+            *details.counts.entry(mismatch.kind).or_default() += 1;
+        }
+        if details.samples.len() < MAX_CORRECTNESS_ERROR_SAMPLES {
+            details.samples.push(CorrectnessErrorSample {
+                session_id,
+                message_type,
+                oldest_frame_seq: oldest,
+                newest_frame_seq: newest,
+                kind: first.kind.as_str(),
+                detail: mismatches
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            });
+        }
+    }
+
+    fn snapshot(&self) -> (Vec<CorrectnessErrorCount>, Vec<CorrectnessErrorSample>) {
+        let details = self
+            .details
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let counts = details
+            .counts
+            .iter()
+            .map(|(kind, count)| CorrectnessErrorCount {
+                kind: kind.as_str(),
+                count: *count,
+            })
+            .collect();
+        (counts, details.samples.clone())
+    }
+}
+
+/// Per-session verification state, owned by the session task.
+#[derive(Debug, Default)]
+struct SessionCheck {
+    continuity: Continuity,
+    measured_partials: u64,
+}
+
+/// Bound on queued verifications. At ~100 µs per 50-frame partial one
+/// verifier thread sustains ~10k partials/s; this absorbs a few seconds of
+/// burst at 4000 sessions before dropping (counted, never blocking).
+const VERIFY_QUEUE_CAPACITY: usize = 16_384;
+
+/// A measured partial selected for value verification, plus any mismatches
+/// already found inline (continuity), so the response is recorded once.
+#[derive(Debug)]
+struct VerifyJob {
+    session_id: usize,
+    partial: PartialMessage,
+    inline: Vec<Mismatch>,
+}
+
+/// Recomputes expected stub output off the receive path. `verify_partial`
+/// costs ~100 µs per 50-frame partial; inline on a tokio worker it would
+/// delay timestamping every other session's messages on that thread.
+struct Verifier {
+    tx: SyncSender<VerifyJob>,
+    thread: JoinHandle<()>,
+}
+
+impl Verifier {
+    fn spawn(correctness: Arc<Correctness>, capacity: usize) -> anyhow::Result<Self> {
+        let (tx, rx) = sync_channel::<VerifyJob>(capacity);
+        let thread = std::thread::Builder::new()
+            .name("stt-verify".to_string())
+            .spawn(move || {
+                // One scratch buffer for the whole run (a 50-frame flush is
+                // 32 KB of rebuilt PCM).
+                let mut scratch = Vec::new();
+                for job in rx {
+                    let mut mismatches = job.inline;
+                    mismatches.extend(verify_partial(
+                        job.session_id,
+                        &job.partial,
+                        correctness.expected,
+                        &mut scratch,
+                    ));
+                    correctness.verified.fetch_add(1, Ordering::Relaxed);
+                    correctness.record(
+                        job.session_id,
+                        "partial",
+                        job.partial.oldest_frame_seq,
+                        job.partial.newest_frame_seq,
+                        &mismatches,
+                    );
+                }
+            })
+            .context("spawn verifier thread")?;
+        Ok(Self { tx, thread })
+    }
+
+    fn sender(&self) -> SyncSender<VerifyJob> {
+        self.tx.clone()
+    }
+
+    /// Drop this handle's sender and wait for the queue to drain. Returns
+    /// once every other sender (one per session task) is gone too, so all
+    /// correctness counters are final.
+    fn finish(self) -> anyhow::Result<()> {
+        drop(self.tx);
+        self.thread
+            .join()
+            .map_err(|_panic| anyhow::anyhow!("verifier thread panicked"))
+    }
+}
+
+/// Hand `job` to the verifier without blocking. If the queue is full, count
+/// the drop and record the inline (continuity) mismatches here instead.
+fn submit_verify(correctness: &Correctness, verify_tx: &SyncSender<VerifyJob>, job: VerifyJob) {
+    match verify_tx.try_send(job) {
+        Ok(()) => {}
+        Err(TrySendError::Full(job) | TrySendError::Disconnected(job)) => {
+            correctness.verify_dropped.fetch_add(1, Ordering::Relaxed);
+            correctness.record(
+                job.session_id,
+                "partial",
+                job.partial.oldest_frame_seq,
+                job.partial.newest_frame_seq,
+                &job.inline,
+            );
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Sample {
     session_id: usize,
@@ -226,6 +447,16 @@ struct Output {
     inference_errors: u64,
     inference_error_counts: Vec<InferenceErrorCount>,
     inference_error_samples: Vec<InferenceErrorSample>,
+    /// Measured responses that failed continuity or expected-value checks.
+    correctness_errors: u64,
+    correctness_error_counts: Vec<CorrectnessErrorCount>,
+    correctness_error_samples: Vec<CorrectnessErrorSample>,
+    verify_every: u64,
+    verified_partials: u64,
+    /// Partials selected for value verification but skipped because the
+    /// verifier queue was full. Non-zero means `verified_partials` undercounts
+    /// the requested sample; continuity was still checked for all of them.
+    verify_dropped: u64,
     timeouts: TimeoutOutput,
     newest_frame_to_partial_latency: Percentiles,
     oldest_frame_to_partial_latency: Percentiles,
@@ -252,6 +483,14 @@ async fn main() -> anyhow::Result<()> {
     let inference_errors = Arc::new(AtomicU64::new(0));
     let inference_error_details = Arc::new(Mutex::new(InferenceErrorDetails::default()));
     let timeout_counters = Arc::new(TimeoutCounters::default());
+    let correctness = Arc::new(Correctness::new(
+        ExpectedConfig {
+            cpu_passes: args.expect_cpu_passes,
+            model_delay_ms: args.expect_model_delay_ms,
+        },
+        args.verify_every,
+    ));
+    let verifier = Verifier::spawn(Arc::clone(&correctness), VERIFY_QUEUE_CAPACITY)?;
     let ramp_up = Duration::from_secs(args.ramp_up_secs);
     let session_start_spread = Duration::from_millis(args.session_start_spread_ms);
     let pre_measure_delay = measure_start_delay(
@@ -278,6 +517,8 @@ async fn main() -> anyhow::Result<()> {
         let inference_err_counter = Arc::clone(&inference_errors);
         let inference_err_details = Arc::clone(&inference_error_details);
         let counters = Arc::clone(&timeout_counters);
+        let session_correctness = Arc::clone(&correctness);
+        let verify_tx = verifier.sender();
         let url = args.url.clone();
         let session_start_at = run_start
             + session_start_delay(session_id, args.sessions, ramp_up, session_start_spread);
@@ -295,6 +536,8 @@ async fn main() -> anyhow::Result<()> {
                     counters.clone(),
                     inference_err_counter,
                     inference_err_details,
+                    session_correctness,
+                    verify_tx,
                 ),
             )
             .await
@@ -348,11 +591,15 @@ async fn main() -> anyhow::Result<()> {
     if let Some(mut writer) = samples_writer {
         writer.flush().context("flush samples csv")?;
     }
+    // Every session task has exited (sample_rx closed), so their verifier
+    // senders are gone; drain the queue before reading correctness counters.
+    verifier.finish()?;
 
     let inference_error_snapshot = inference_error_details
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .snapshot();
+    let (correctness_error_counts, correctness_error_samples) = correctness.snapshot();
     let output = Output {
         url: args.url,
         service_name: args.service_name,
@@ -371,6 +618,12 @@ async fn main() -> anyhow::Result<()> {
         inference_errors: inference_errors.load(Ordering::Relaxed),
         inference_error_counts: inference_error_snapshot.counts,
         inference_error_samples: inference_error_snapshot.samples,
+        correctness_errors: correctness.errors.load(Ordering::Relaxed),
+        correctness_error_counts,
+        correctness_error_samples,
+        verify_every: args.verify_every,
+        verified_partials: correctness.verified.load(Ordering::Relaxed),
+        verify_dropped: correctness.verify_dropped.load(Ordering::Relaxed),
         timeouts: timeout_counters.snapshot(),
         newest_frame_to_partial_latency: percentiles(&newest_hist),
         oldest_frame_to_partial_latency: percentiles(&oldest_hist),
@@ -393,8 +646,11 @@ async fn run_session(
     timeout_counters: Arc<TimeoutCounters>,
     inference_errors: Arc<AtomicU64>,
     inference_error_details: Arc<Mutex<InferenceErrorDetails>>,
+    correctness: Arc<Correctness>,
+    verify_tx: SyncSender<VerifyJob>,
 ) -> anyhow::Result<()> {
     sleep_until(session_start_at).await;
+    let mut check = SessionCheck::default();
     let (ws, _) = timed(
         timeouts.connect,
         async {
@@ -458,6 +714,9 @@ async fn run_session(
                     &sample_tx,
                     &inference_errors,
                     &inference_error_details,
+                    &correctness,
+                    &verify_tx,
+                    &mut check,
                 )
                     .await?
                     == InboundState::Closed
@@ -490,6 +749,9 @@ async fn run_session(
                     &sample_tx,
                     &inference_errors,
                     &inference_error_details,
+                    &correctness,
+                    &verify_tx,
+                    &mut check,
                 )
                     .await?
                     == InboundState::Closed
@@ -548,6 +810,9 @@ async fn process_inbound(
     sample_tx: &mpsc::Sender<Sample>,
     inference_errors: &Arc<AtomicU64>,
     inference_error_details: &Arc<Mutex<InferenceErrorDetails>>,
+    correctness: &Correctness,
+    verify_tx: &SyncSender<VerifyJob>,
+    check: &mut SessionCheck,
 ) -> anyhow::Result<InboundState> {
     let message = match message {
         Some(Ok(Message::Close(_))) => return Ok(InboundState::Closed),
@@ -563,9 +828,25 @@ async fn process_inbound(
     };
     let server_message: ServerMessage =
         serde_json::from_str(&text).context("decode server message")?;
+    let now = Instant::now();
+    let measured = now >= measure_start && now <= end_at;
     let partial = match server_message {
         ServerMessage::Partial(partial) => partial,
         ServerMessage::Error(error) => {
+            // Error frames consume their batch's range (gateways drain and
+            // do not retry), so they must tile the sequence like partials.
+            let gap = check
+                .continuity
+                .observe(error.oldest_frame_seq, error.newest_frame_seq);
+            if measured && let Some(mismatch) = gap {
+                correctness.record(
+                    session_id,
+                    "error",
+                    error.oldest_frame_seq,
+                    error.newest_frame_seq,
+                    &[mismatch],
+                );
+            }
             inference_errors.fetch_add(1, Ordering::Relaxed);
             inference_error_details
                 .lock()
@@ -584,20 +865,36 @@ async fn process_inbound(
             return Ok(InboundState::Open);
         }
     };
+    // Observe the range before validating: a partial that fails some other
+    // check still consumed its frames, so the next one must not also report
+    // a gap. (`observe` ignores malformed ranges.)
+    let continuity = check
+        .continuity
+        .observe(partial.oldest_frame_seq, partial.newest_frame_seq);
     partial.validate().context("validate partial")?;
-
-    let now = Instant::now();
-    if now < measure_start || now > end_at {
+    if !measured {
         return Ok(InboundState::Open);
     }
+    let mut inline: Vec<Mismatch> = continuity.into_iter().collect();
+    let sent = sent_times.len() as u64;
+    let unsent = partial.newest_frame_seq > sent;
+    if unsent {
+        inline.push(Mismatch {
+            kind: MismatchKind::UnsentFrame,
+            detail: format!(
+                "newest_frame_seq={} but only {sent} frames sent",
+                partial.newest_frame_seq
+            ),
+        });
+    }
 
+    // Latency first, from the timestamp taken right after decode.
     let newest_sent = sent_times
         .get(partial.newest_frame_seq.saturating_sub(1) as usize)
         .copied();
     let oldest_sent = sent_times
         .get(partial.oldest_frame_seq.saturating_sub(1) as usize)
         .copied();
-
     if let (Some(newest_sent), Some(oldest_sent)) = (newest_sent, oldest_sent) {
         let flush_lateness_us = (partial.flush_lateness_ms.max(0.0) * 1000.0).round() as u64;
         sample_tx
@@ -606,7 +903,7 @@ async fn process_inbound(
                 oldest_frame_seq: partial.oldest_frame_seq,
                 newest_frame_seq: partial.newest_frame_seq,
                 frames: partial.frames,
-                transcript: partial.transcript,
+                transcript: partial.transcript.clone(),
                 audio_bytes: partial.audio_bytes,
                 newest_us: now.saturating_duration_since(newest_sent).as_micros() as u64,
                 oldest_us: now.saturating_duration_since(oldest_sent).as_micros() as u64,
@@ -615,6 +912,34 @@ async fn process_inbound(
             })
             .await
             .context("send sample")?;
+    }
+
+    // Value verification runs on the verifier thread; only O(1) work here.
+    let selected = !unsent && correctness.verify_every > 0 && {
+        let nth = check
+            .measured_partials
+            .is_multiple_of(correctness.verify_every);
+        check.measured_partials += 1;
+        nth
+    };
+    if selected {
+        submit_verify(
+            correctness,
+            verify_tx,
+            VerifyJob {
+                session_id,
+                partial,
+                inline,
+            },
+        );
+    } else {
+        correctness.record(
+            session_id,
+            "partial",
+            partial.oldest_frame_seq,
+            partial.newest_frame_seq,
+            &inline,
+        );
     }
     Ok(InboundState::Open)
 }
@@ -760,6 +1085,249 @@ mod tests {
         assert_eq!(snapshot.samples[0].message, "inference returned HTTP 404");
         assert_eq!(snapshot.samples[0].inference_status, Some(404));
         assert!(!snapshot.samples[0].retryable);
+    }
+
+    fn partial_text(session_id: usize, oldest: u64, newest: u64) -> Message {
+        let stub =
+            stt_loadgen::verify::expected_stub(session_id, oldest, newest, 4, &mut Vec::new());
+        let partial = stt_loadgen::protocol::PartialMessage {
+            oldest_frame_seq: oldest,
+            newest_frame_seq: newest,
+            frames: newest - oldest + 1,
+            rms: stub.rms,
+            zero_crossings: stub.zero_crossings,
+            checksum: stub.checksum,
+            samples: stub.samples,
+            transcript: stub.transcript.to_string(),
+            audio_bytes: stub.audio_bytes,
+            cpu_passes: 4,
+            model_delay_ms: 75,
+            flush_lateness_ms: 0.0,
+            inflight_model_jobs: 1,
+        };
+        let mut value = serde_json::to_value(partial).expect("serialize partial");
+        value["type"] = "partial".into();
+        Message::Text(value.to_string().into())
+    }
+
+    fn error_text(oldest: u64, newest: u64) -> Message {
+        Message::Text(
+            serde_json::json!({
+                "type": "error", "stage": "inference_request", "kind": "timeout",
+                "message": "timed out", "oldest_frame_seq": oldest,
+                "newest_frame_seq": newest, "frames": newest - oldest + 1,
+                "audio_bytes": (newest - oldest + 1) * 640, "oldest_age_ms": 0.0,
+                "newest_age_ms": 0.0, "flush_lateness_ms": 0.0,
+                "inference_elapsed_ms": null, "inflight_gateway_batches": 1,
+                "gateway_buffer_frames": 0, "inference_status": null, "retryable": true
+            })
+            .to_string()
+            .into(),
+        )
+    }
+
+    /// Drives `process_inbound` for one session with a measured window
+    /// around "now" and a real verifier thread.
+    struct Harness {
+        session_id: usize,
+        now: Instant,
+        sent_times: Vec<Instant>,
+        tx: mpsc::Sender<Sample>,
+        rx: mpsc::Receiver<Sample>,
+        inference_errors: Arc<AtomicU64>,
+        inference_details: Arc<Mutex<InferenceErrorDetails>>,
+        correctness: Arc<Correctness>,
+        verify_tx: SyncSender<VerifyJob>,
+        verifier: Option<Verifier>,
+        check: SessionCheck,
+    }
+
+    impl Harness {
+        fn new(session_id: usize, verify_every: u64, sent: usize, sample_capacity: usize) -> Self {
+            let now = Instant::now();
+            let (tx, rx) = mpsc::channel(sample_capacity);
+            let correctness = Arc::new(Correctness::new(ExpectedConfig::default(), verify_every));
+            let verifier = Verifier::spawn(Arc::clone(&correctness), VERIFY_QUEUE_CAPACITY)
+                .expect("spawn verifier");
+            Self {
+                session_id,
+                now,
+                sent_times: vec![now; sent],
+                tx,
+                rx,
+                inference_errors: Arc::new(AtomicU64::new(0)),
+                inference_details: Arc::new(Mutex::new(InferenceErrorDetails::default())),
+                verify_tx: verifier.sender(),
+                verifier: Some(verifier),
+                correctness,
+                check: SessionCheck::default(),
+            }
+        }
+
+        async fn feed(&mut self, message: Message) -> anyhow::Result<InboundState> {
+            process_inbound(
+                self.session_id,
+                Some(Ok(message)),
+                self.now - Duration::from_secs(1),
+                self.now + Duration::from_secs(600),
+                &self.sent_times,
+                &self.tx,
+                &self.inference_errors,
+                &self.inference_details,
+                &self.correctness,
+                &self.verify_tx,
+                &mut self.check,
+            )
+            .await
+        }
+
+        /// Close the sample channel and drain the verifier, returning the
+        /// number of latency samples recorded.
+        async fn finish(&mut self) -> usize {
+            // Replace our sender with a dead one so the verifier can exit.
+            let (dead, _) = sync_channel(0);
+            drop(std::mem::replace(&mut self.verify_tx, dead));
+            self.verifier
+                .take()
+                .expect("finish once")
+                .finish()
+                .expect("verifier");
+            let (closed, _) = mpsc::channel(1);
+            drop(std::mem::replace(&mut self.tx, closed));
+            let mut samples = 0;
+            while self.rx.recv().await.is_some() {
+                samples += 1;
+            }
+            samples
+        }
+    }
+
+    #[tokio::test]
+    async fn process_inbound_counts_correctness_errors_without_aborting() {
+        let session_id = 5;
+        let mut h = Harness::new(session_id, 1, 200, 64);
+        let messages = [
+            partial_text(session_id, 1, 50),    // ok
+            error_text(51, 60),                 // ok: error frames consume range
+            partial_text(session_id, 62, 100),  // gap: frame 61 lost
+            partial_text(6, 101, 150),          // another session's result
+            partial_text(session_id, 151, 250), // frames 201..=250 never sent
+        ];
+        for message in messages {
+            let state = h
+                .feed(message)
+                .await
+                .expect("correctness failures must not abort the session");
+            assert_eq!(state, InboundState::Open);
+        }
+        let samples = h.finish().await;
+
+        assert_eq!(
+            samples, 3,
+            "partials with known send times still feed latency"
+        );
+        let correctness = &h.correctness;
+        assert_eq!(h.inference_errors.load(Ordering::Relaxed), 1);
+        assert_eq!(correctness.errors.load(Ordering::Relaxed), 3);
+        assert_eq!(correctness.verified.load(Ordering::Relaxed), 3);
+        assert_eq!(correctness.verify_dropped.load(Ordering::Relaxed), 0);
+        let (counts, details) = correctness.snapshot();
+        let kinds: Vec<_> = counts.iter().map(|count| count.kind).collect();
+        for kind in ["continuity_gap", "checksum", "unsent_frame"] {
+            assert!(kinds.contains(&kind), "missing {kind} in {kinds:?}");
+        }
+        assert_eq!(details.len(), 3);
+        let gap = details
+            .iter()
+            .find(|d| d.kind == "continuity_gap")
+            .expect("gap sample");
+        assert_eq!(gap.oldest_frame_seq, 62);
+    }
+
+    #[tokio::test]
+    async fn verify_every_samples_value_checks_but_not_continuity() {
+        let mut h = Harness::new(1, 3, 500, 64);
+        // Six tiling partials (verified: #0 and #3), then one with a gap.
+        let mut messages: Vec<_> = (0..6)
+            .map(|i| partial_text(1, i * 50 + 1, (i + 1) * 50))
+            .collect();
+        messages.push(partial_text(1, 302, 350));
+        for message in messages {
+            h.feed(message).await.expect("process");
+        }
+        h.finish().await;
+        assert_eq!(h.correctness.verified.load(Ordering::Relaxed), 3);
+        assert_eq!(h.correctness.errors.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn full_verifier_queue_drops_and_still_records_continuity() {
+        let mut h = Harness::new(1, 1, 200, 64);
+        // Rendezvous channel with no receiver waiting: every try_send is Full.
+        let (full_tx, _rx_kept_alive) = sync_channel(0);
+        h.verify_tx = full_tx;
+        h.feed(partial_text(1, 1, 50)).await.expect("process");
+        h.feed(partial_text(1, 52, 100)).await.expect("process"); // gap
+        h.feed(partial_text(2, 101, 150)).await.expect("process"); // wrong session
+        h.finish().await;
+        let correctness = &h.correctness;
+        assert_eq!(correctness.verify_dropped.load(Ordering::Relaxed), 3);
+        assert_eq!(correctness.verified.load(Ordering::Relaxed), 0);
+        // The gap is still caught inline; the wrong-session values are not.
+        assert_eq!(correctness.errors.load(Ordering::Relaxed), 1);
+        let (counts, _) = correctness.snapshot();
+        assert_eq!(counts.len(), 1);
+        assert_eq!(counts[0].kind, "continuity_gap");
+    }
+
+    #[tokio::test]
+    async fn partial_failing_validate_still_consumes_its_range() {
+        let mut h = Harness::new(1, 1, 200, 64);
+        h.feed(partial_text(1, 1, 50)).await.expect("process");
+        let Message::Text(text) = partial_text(1, 51, 100) else {
+            unreachable!()
+        };
+        let mut bad: serde_json::Value = serde_json::from_str(&text).unwrap();
+        bad["transcript"] = "".into();
+        let err = h
+            .feed(Message::Text(bad.to_string().into()))
+            .await
+            .expect_err("empty transcript fails validate");
+        assert!(format!("{err:#}").contains("validate partial"));
+        // Next partial tiles after the invalid one: no double-counted gap.
+        h.feed(partial_text(1, 101, 150)).await.expect("process");
+        h.finish().await;
+        assert_eq!(h.correctness.errors.load(Ordering::Relaxed), 0);
+        assert_eq!(h.check.continuity.last_newest(), 150);
+    }
+
+    /// Receive-path cost per measured partial with value verification handed
+    /// to the verifier thread, vs. verification off (the decode+latency
+    /// floor). Run: `cargo test --release -p stt-loadgen --bin stt-loadgen
+    /// receive_path_cost -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore = "microbenchmark; run explicitly in --release"]
+    async fn receive_path_cost() {
+        let n = 2_000_u64;
+        let messages: Vec<_> = (0..n)
+            .map(|i| partial_text(9, i * 50 + 1, (i + 1) * 50))
+            .collect();
+        for verify_every in [0, 1] {
+            let mut h = Harness::new(9, verify_every, (n * 50) as usize, n as usize + 1);
+            let started = std::time::Instant::now();
+            for message in messages.iter().cloned() {
+                h.feed(message).await.expect("process");
+            }
+            let per = started.elapsed() / n as u32;
+            h.finish().await;
+            assert_eq!(h.correctness.errors.load(Ordering::Relaxed), 0);
+            println!(
+                "verify_every={verify_every}: {per:?}/partial on the receive path \
+                 (verified {}, dropped {})",
+                h.correctness.verified.load(Ordering::Relaxed),
+                h.correctness.verify_dropped.load(Ordering::Relaxed)
+            );
+        }
     }
 
     #[test]

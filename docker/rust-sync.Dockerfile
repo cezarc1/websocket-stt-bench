@@ -3,6 +3,8 @@ FROM rust:1.95.0-bookworm AS build
 WORKDIR /app
 
 COPY rust-toolchain.toml Cargo.toml Cargo.lock deny.toml ./
+# Shared stt-stub crate (workspace member; inference-server and loadgen depend on it).
+COPY crates/stt-stub crates/stt-stub
 COPY services/inference-server/Cargo.toml services/inference-server/Cargo.toml
 COPY services/rust-axum/Cargo.toml services/rust-axum/Cargo.toml
 COPY services/rust-sync/Cargo.toml services/rust-sync/Cargo.toml

@@ -12,7 +12,7 @@ A comparative benchmark of streaming speech-to-text gateways implementing one sh
 - `services/inference-server/` — shared deterministic compute (Rust + Axum). All three gateways POST batched PCM here over HTTP/2 instead of computing inline.
 - `loadgen/rust/` — single Rust load generator that drives all three
 
-The deterministic STT stub (FNV-1a checksum, RMS, zero crossings, plus a transcript word indexed by checksum) is now centralized: it runs in `services/inference-server/src/main.rs::compute_stub` and is the single source of truth for numeric outputs. A Python reimplementation in `services/python-fastapi/app/stub.py::compute_stub` exists *only* for cross-language parity tests under `services/python-fastapi/tests/`; nothing on the runtime path calls it. Numeric divergence between the inference server and that reference impl is a bug.
+The deterministic STT stub (FNV-1a checksum, RMS, zero crossings, plus a transcript word indexed by checksum) is now centralized: it lives in the shared `crates/stt-stub` crate (`stt_stub::compute_stub`), which the inference server runs and the loadgen/conformance harness reuses to recompute the expected output of every partial; it is the single source of truth for numeric outputs. A Python reimplementation in `services/python-fastapi/app/stub.py::compute_stub` exists *only* for cross-language parity tests under `services/python-fastapi/tests/`; nothing on the runtime path calls it. Numeric divergence between the inference server and that reference impl is a bug.
 
 `AGENTS.md` is the canonical contributor guide; this file covers architecture decisions and gotchas that aren't obvious from the tree.
 
