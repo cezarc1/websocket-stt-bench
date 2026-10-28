@@ -1,6 +1,26 @@
 # Elixir / Phoenix Benchmark Notes
 
-## Summary
+## 2026-10-28 homelab re-run (split nodes, correctness-verified)
+
+Split nodes: gateway + loadgen on node `cezar-4090`, one 6-CPU inference replica on node `2080` across the LAN; images tagged `gateway-fixes`. Every measured partial was verified client-side (exact stub values + per-session frame continuity) and `correctness_errors` was 0 on every point below. Same harness (`scripts/bench/run_point.sh`: 10 s warmup, 45 s measured, 30 s ramp, 1000 ms spread) and SLO; confirmed = 2/2 passes. Not directly comparable with the earlier single-node sections below, which are kept as history (see the README note).
+
+| Shape | Result | Bottleneck |
+|---|---:|---|
+| 1 vCPU / 2 GiB | 1250 confirmed (2/2) ↔ 1300 first fail | connect timeouts |
+| 2 vCPU / 2 GiB | 2100 confirmed (2/2) ↔ 2200 (1 pass / 1 fail) | connect timeouts |
+
+Gateway fixes on this branch: a crashed inference task no longer wedges the session with `busy?` stuck, and a non-object JSON inference body becomes a `parse_error` frame.
+
+| Sessions | Result | Newest p50 / p95 | Oldest p50 / p95 |
+|---:|---|---:|---:|
+| 1 vCPU: 1250 | pass, confirmed (2/2) | 107 / 157-170 ms | 1087 / 1136-1149 ms |
+| 1 vCPU: 1300 | fail, 167 errors (154 connect timeouts) | 104 / 148 ms | 1084 / 1127 ms |
+| 1 vCPU: 1325 | fail, every session errored + 195 inference errors (Finch `request_timeout`) | 172 / 850 ms | 1154 / 3092 ms |
+| 2 vCPU: 2100 | pass, confirmed (2/2) | 105-106 / 155-167 ms | 1086 / 1136-1145 ms |
+| 2 vCPU: 2200 | 1 pass / 1 fail (347 errors, 332 connect timeouts) | 105-110 / 146-224 ms | 1085-1092 / 1126-1201 ms |
+| 2 vCPU: 2300 | fail, every session errored + 745 inference errors (Finch `request_timeout`) | 380 / 1055 ms | 1380 / 2447 ms |
+
+## Summary (earlier single-node runs)
 
 | Shape | Result | Bottleneck |
 |---|---:|---|

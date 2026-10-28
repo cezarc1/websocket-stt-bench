@@ -1,6 +1,23 @@
 # TypeScript / Bun Benchmark Notes
 
-## Summary
+## 2026-10-28 homelab re-run (split nodes, correctness-verified)
+
+Split nodes: gateway + loadgen on node `cezar-4090`, one 6-CPU inference replica on node `2080` across the LAN; images tagged `gateway-fixes`. Every measured partial was verified client-side (exact stub values + per-session frame continuity) and `correctness_errors` was 0 on every point below. Same harness (`scripts/bench/run_point.sh`: 10 s warmup, 45 s measured, 30 s ramp, 1000 ms spread) and SLO; confirmed = 2/2 passes. Not directly comparable with the earlier single-node sections below, which are kept as history (see the README note).
+
+| Shape | Result | Bottleneck |
+|---|---:|---|
+| 1 vCPU / 2 GiB | 2400 confirmed (2/2) ↔ 2500 (1 pass / 1 fail) | inference connection-reset errors, then error cliff |
+| 2 vCPU / 2 GiB | n/a | not measured |
+
+Gateway fixes on this branch: close 1011 when Bun drops an outbound message (was a silent stop); `maxPayloadLength` 8 KiB → 128 KiB so oversized frames reach the 1003 path.
+
+| Sessions | Result | Newest p50 / p95 | Oldest p50 / p95 |
+|---:|---|---:|---:|
+| 2400 | pass, confirmed (2/2) | 102 / 135-145 ms | 1082 / 1118-1137 ms |
+| 2500 | 1 pass / 1 fail (17 inference connection resets) | 103-105 / 148-174 ms | 1082-1084 / 1138-1179 ms |
+| 2600 | fail, every session errored + 4626 inference error frames | 114 / 1357 ms | 1093 / 3295 ms |
+
+## Summary (earlier single-node runs)
 
 | Shape | Result | Bottleneck |
 |---|---:|---|

@@ -1,6 +1,25 @@
 # oxcaml-epoll Benchmark Notes
 
-## Summary
+## 2026-10-28 homelab re-run (split nodes, correctness-verified)
+
+Split nodes: gateway + loadgen on node `cezar-4090`, one 6-CPU inference replica on node `2080` across the LAN; images tagged `gateway-fixes`. Every measured partial was verified client-side (exact stub values + per-session frame continuity) and `correctness_errors` was 0 on every point below. Same harness (`scripts/bench/run_point.sh`: 10 s warmup, 45 s measured, 30 s ramp, 1000 ms spread) and SLO; confirmed = 2/2 passes. Not directly comparable with the earlier single-node sections below, which are kept as history (see the README note).
+
+| Shape | Result | Bottleneck |
+|---|---:|---|
+| 1 vCPU / 2 GiB | 3050 confirmed (2/2) ↔ 3100 first fail | newest-p50 latency |
+| 2 vCPU / 2 GiB | 3000 confirmed (2/2) ↔ 3100 first fail | single-threaded epoll loop (no second-core lift) |
+
+Gateway fixes on this branch: a pool-exhausted error frame no longer re-sends its frames; non-FIN data frames and RSV bits close 1002; nothing is sent after our Close.
+
+| Sessions | Result | Newest p50 / p95 | Oldest p50 / p95 |
+|---:|---|---:|---:|
+| 1 vCPU: 3050 | pass, confirmed (2/2) | 113-193 / 228-253 ms | 1102-1170 / 1196-1236 ms |
+| 1 vCPU: 3100 | fail, newest p50 | 218 / 262 ms | 1197 / 1246 ms |
+| 2 vCPU: 3000 | pass, confirmed (2/2) | 105-107 / 205-212 ms | 1087-1092 / 1164-1170 ms |
+| 2 vCPU: 3100 | fail, newest + oldest p50 | 226 / 265 ms | 1206 / 1250 ms |
+| 2 vCPU: 3500 | fail, latency + 502 "inference pool exhausted" error frames | 286 / 339 ms | 1265 / 1333 ms |
+
+## Summary (earlier single-node runs)
 
 | Shape | Result | Bottleneck |
 |---|---:|---|

@@ -1,6 +1,26 @@
 # Rust / No-Async-Runtime Benchmark Notes
 
-## Summary
+## 2026-10-28 homelab re-run (split nodes, correctness-verified)
+
+Split nodes: gateway + loadgen on node `cezar-4090`, one 6-CPU inference replica on node `2080` across the LAN; images tagged `gateway-fixes`. Every measured partial was verified client-side (exact stub values + per-session frame continuity) and `correctness_errors` was 0 on every point below. Same harness (`scripts/bench/run_point.sh`: 10 s warmup, 45 s measured, 30 s ramp, 1000 ms spread) and SLO; confirmed = 2/2 passes. Not directly comparable with the earlier single-node sections below, which are kept as history (see the README note).
+
+| Shape | Result | Bottleneck |
+|---|---:|---|
+| 1 vCPU / 2 GiB | 3900 confirmed (2/2) ↔ 4000 first fail | newest-p50 latency |
+| 2 vCPU / 2 GiB | 4400 confirmed (2/2) ↔ 4500 first fail | newest-p50 latency (WS loop is the heavy thread) |
+
+Gateway fixes on this branch: a late inference result arriving after a timeout was attached to the next batch (results are now tagged by `oldest_seq`); a Close was missed on readable+writable edge-triggered events; stale response bytes were kept across a retry.
+
+| Sessions | Result | Newest p50 / p95 | Oldest p50 / p95 |
+|---:|---|---:|---:|
+| 1 vCPU: 3900 | pass, confirmed (2/2) | 193-194 / 271-273 ms | 1175-1177 / 1265 ms |
+| 1 vCPU: 4000 | fail, newest p50 | 200 / 278 ms | 1182 / 1273 ms |
+| 2 vCPU: 4400 | pass, confirmed (2/2) | 196 / 264-266 ms | 1174-1176 / 1255-1258 ms |
+| 2 vCPU: 4500 | fail, newest p50 | 202 / 272 ms | 1184 / 1265 ms |
+
+**A/B on 1 vCPU (why 4400 → 3900).** The `main` image on the split setup matches the fixed image (3900 pass, 4000 and 4400 fail), so the code changes are not the cause. The fixed image with inference co-located also passes 3900 and fails 4400 (single repeats); nothing between those was run co-located, so the split's share of the drop was not bracketed. The rest is environmental (candidates: the new client payload, the loadgen's verification thread on the same node, node/kernel/k3s changes since May) but not isolated. The 2-vCPU lift is 1.13X (4400/3900).
+
+## Summary (earlier single-node runs)
 
 | Shape | Result | Bottleneck |
 |---|---:|---|

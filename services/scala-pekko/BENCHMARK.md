@@ -1,6 +1,29 @@
 # Scala / Pekko Benchmark Notes
 
-## Summary
+## 2026-10-28 homelab re-run (split nodes, correctness-verified)
+
+Split nodes: gateway + loadgen on node `cezar-4090`, one 6-CPU inference replica on node `2080` across the LAN; images tagged `gateway-fixes`. Every measured partial was verified client-side (exact stub values + per-session frame continuity) and `correctness_errors` was 0 on every point below. Same harness (`scripts/bench/run_point.sh`: 10 s warmup, 45 s measured, 30 s ramp, 1000 ms spread) and SLO; confirmed = 2/2 passes. Not directly comparable with the earlier single-node sections below, which are kept as history (see the README note).
+
+| Shape | Result | Bottleneck |
+|---|---:|---|
+| 1 vCPU / 2 GiB | 600 confirmed (2/2) ↔ 650 (1 pass / 1 fail) | latency, then connect timeouts |
+| 2 vCPU / 2 GiB | 1150 confirmed (2/2) ↔ 1200 first fail | latency, then connect timeouts |
+
+Gateway fixes on this branch: real 1002/1003 close codes (Pekko's message API only sends 1000/1011; the fix relies on documented Pekko internals and fails loudly if they change); fragmented binary frames are collected in order; partials refused by a full queue are retried instead of dropped.
+
+| Sessions | Result | Newest p50 / p95 | Oldest p50 / p95 |
+|---:|---|---:|---:|
+| 1 vCPU: 600 | pass, confirmed (2/2) | 192-193 / 275-278 ms | 1174 / 1257-1264 ms |
+| 1 vCPU: 650 | 1 pass / 1 fail, newest p50 200 | 198-200 / 316-322 ms | 1179-1182 / 1294-1299 ms |
+| 1 vCPU: 700 | fail, newest p50 + p95 | 217 / 479 ms | 1199 / 1434 ms |
+| 1 vCPU: 850 | fail, latency + 73 connect timeouts | 344 / 738 ms | 1328 / 1701 ms |
+| 2 vCPU: 1150 | pass, confirmed (2/2) | 193-196 / 310-321 ms | 1174-1177 / 1290-1322 ms |
+| 2 vCPU: 1200 | fail, newest p50 + p95 | 205 / 398 ms | 1185 / 1378 ms |
+| 2 vCPU: 1400 | fail, latency + 21 connect timeouts | 395 / 614 ms | 1378 / 1618 ms |
+
+**A/B on 1 vCPU (why 1400 → 600).** At the earlier 4 GiB shape the fixed image fails 600 (latency), 900, 1200 and 1400 (latency + connect timeouts) — single repeats, no pod restarts or OOM. The `main` image at 900-1400 also fails on latency plus errors like the fixed image (connect timeouts at 1200/1400; at 900 its 142 errors were not timeouts). At 600 `main` fails on 283 errors with ~19k of ~27k partials: sessions closed 1003 on TCP-split frames (the old code rejects a 640-byte frame split across TCP reads; fixed on this branch). So the drop is not the code change and not memory; it is environmental (connect timeouts / latency under this setup), and the cause is not isolated. The fixed code is strictly more correct.
+
+## Summary (earlier single-node runs)
 
 | Shape | Result | Bottleneck |
 |---|---:|---|

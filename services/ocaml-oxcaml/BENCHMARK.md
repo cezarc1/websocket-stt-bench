@@ -1,6 +1,25 @@
 # OCaml / OxCaml Benchmark Notes
 
-## Summary
+## 2026-10-28 homelab re-run (split nodes, correctness-verified)
+
+Split nodes: gateway + loadgen on node `cezar-4090`, one 6-CPU inference replica on node `2080` across the LAN; images tagged `gateway-fixes`. Every measured partial was verified client-side (exact stub values + per-session frame continuity) and `correctness_errors` was 0 on every point below. Same harness (`scripts/bench/run_point.sh`: 10 s warmup, 45 s measured, 30 s ramp, 1000 ms spread) and SLO; confirmed = 2/2 passes. Not directly comparable with the earlier single-node sections below, which are kept as history (see the README note).
+
+| Shape | Result | Bottleneck |
+|---|---:|---|
+| 1 vCPU / 2 GiB | 2100 confirmed (2/2) ↔ 2200 first fail | CPU, single Async domain |
+| one 2-vCPU pod | 2100 confirmed (2/2) ↔ 2200 first fail | no second-core lift |
+| two 1-vCPU replicas | not re-measured | — |
+
+Gateway fixes on this branch (shared with stock OCaml): fragmented-message reassembly; RSV bits and bad 64-bit lengths close 1002; nothing is sent after our Close; faster teardown; a vanished-peer session leak fixed.
+
+| Sessions | Result | Newest p50 / p95 | Oldest p50 / p95 |
+|---:|---|---:|---:|
+| 1 vCPU: 2100 | pass, confirmed (2/2) | 189 / 233-234 ms | 1169 / 1214 ms |
+| 1 vCPU: 2200 | fail, newest + oldest p50 | 225 / 260 ms | 1206 / 1241 ms |
+| 2 vCPU: 2100 | pass, confirmed (2/2) | 186-187 / 220-221 ms | 1167 / 1201-1202 ms |
+| 2 vCPU: 2200 | fail, newest p50 | 218 / 252 ms | 1199 / 1233 ms |
+
+## Summary (earlier single-node runs)
 
 | Shape | Result | Bottleneck |
 |---|---:|---|

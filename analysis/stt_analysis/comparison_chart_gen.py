@@ -28,18 +28,19 @@ import matplotlib.pyplot as plt
 # raw-transport variants exclude the generic first-party WebSocket/HTTP/SHA-1/
 # base64/masking shim so package code is treated consistently.
 RUNTIMES: list[tuple[str, int, int, int, int, str]] = [
-    ("Rust / mio", 4400, 1221, 10, -16, "left"),
-    ("C++23 / uWebSockets", 4350, 1551, -10, -14, "right"),
-    ("Async Rust / Tokio", 3475, 696, 10, 10, "left"),
-    ("Java / Helidon Nima", 2625, 917, 10, 10, "left"),
-    ("oxcaml-epoll", 2900, 1680, -10, 10, "right"),
-    ("TypeScript / Bun", 2550, 734, 10, -14, "left"),
-    ("Go / net/http", 2500, 893, 10, -14, "left"),
-    ("OxCaml", 2200, 879, 10, 10, "left"),
-    ("OCaml", 1930, 850, 10, -14, "left"),
-    ("Scala / Pekko", 1400, 726, 10, -14, "left"),
+    # 2026-10-28 split-node, correctness-verified re-run (README TL;DR).
+    ("Rust / mio", 3900, 1221, 10, -16, "left"),
+    ("C++23 / uWebSockets", 3000, 1551, 10, -14, "left"),
+    ("Async Rust / Tokio", 3300, 696, 10, 10, "left"),
+    ("Java / Helidon Nima", 2300, 917, -10, 10, "right"),
+    ("oxcaml-epoll", 3050, 1680, -10, 10, "right"),
+    ("TypeScript / Bun", 2400, 734, 10, -14, "left"),
+    ("Go / net/http", 2500, 893, 10, -4, "left"),
+    ("OxCaml", 2100, 879, 8, -16, "left"),
+    ("OCaml", 1850, 850, -10, 6, "right"),
+    ("Scala / Pekko", 600, 726, 8, 10, "left"),
     ("Elixir / Phoenix", 1250, 784, 10, 10, "left"),
-    ("Python (uvloop + FastAPI)", 1100, 678, -10, 10, "right"),
+    ("Python (uvloop + FastAPI)", 1150, 678, -10, -14, "right"),
 ]
 
 # Strict Pareto-optimal points: no other runtime has BOTH higher sessions
@@ -83,14 +84,14 @@ def render(out_path: Path) -> None:
     ax.set_xlabel("Concurrent sessions sustained at 1 vCPU", fontsize=11)
     ax.set_ylabel("LOC", fontsize=11)
     ax.set_title(
-        "Concurrent sessions vs. LOC — websocket-stt-bench",
+        "Concurrent sessions vs. LOC — websocket-stt-bench (2026-10-28 split-node run)",
         fontsize=13,
         pad=14,
     )
     ax.grid(True, linestyle=":", alpha=0.25, zorder=0)
     ax.set_axisbelow(True)
 
-    ax.set_xlim(800, 4800)
+    ax.set_xlim(300, 4400)
     ax.set_ylim(600, 1800)
 
     fig.text(
