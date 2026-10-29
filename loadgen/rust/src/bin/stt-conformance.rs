@@ -404,31 +404,43 @@ async fn stream_paced(
     Ok(partial_times)
 }
 
+/// Flush intervals the cadence case observes. Must exceed 10 so a gateway
+/// that skips one flush in ten (its frames then ride along in the next
+/// partial, so continuity and values still pass) is caught by the interval
+/// bound. Costs ~13 s per service.
+const CADENCE_INTERVALS: usize = 12;
+
 async fn flush_cadence(target: &ServiceTarget, expected: ExpectedConfig) -> anyhow::Result<()> {
+    let partials = CADENCE_INTERVALS + 1;
+    // Keep sending through the last expected partial; `stream_paced` checks
+    // continuity and exact values on every one of them.
+    let send_for = FLUSH_INTERVAL * partials as u32 + Duration::from_millis(250);
     let partial_times = stream_paced(
         target,
         CADENCE_SESSION,
         expected,
-        3,
-        Duration::from_millis(3_250),
-        Duration::from_secs(7),
+        partials,
+        send_for,
+        send_for + Duration::from_secs(4),
     )
     .await?;
 
     ensure!(
-        partial_times.len() >= 3,
-        "expected at least 3 partials, got {}",
+        partial_times.len() >= partials,
+        "expected at least {partials} partials, got {}",
         partial_times.len()
     );
-    for window in partial_times.windows(2) {
+    for (index, window) in partial_times.windows(2).enumerate() {
         let interval = window[1].saturating_duration_since(window[0]);
         ensure!(
             interval >= FLUSH_INTERVAL.saturating_sub(Duration::from_millis(250)),
-            "partial interval below tolerance: {interval:?}"
+            "partial interval {} below tolerance: {interval:?}",
+            index + 1
         );
         ensure!(
             interval <= FLUSH_INTERVAL + Duration::from_millis(500),
-            "partial interval above tolerance: {interval:?}"
+            "partial interval {} above tolerance: {interval:?} (skipped flush?)",
+            index + 1
         );
     }
     ensure!(

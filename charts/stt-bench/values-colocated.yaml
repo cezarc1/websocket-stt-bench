@@ -1,0 +1,25 @@
+# Single-node placement for gateway-bound capacity runs on the homelab k3s
+# cluster: the gateway under test, the load generator and the shared
+# inference server all on cezar-4090 (32 CPUs), so no request crosses the
+# LAN. Inference gets 3 x 6-CPU replicas so it stays far below its own
+# saturation point (benchmark it with stt-inferbench before trusting a sweep).
+# CPU budget: inference 18 + loadgen 4 + gateway <= 2 = 24 of 32 cores.
+# Layer on top of your homelab values:
+#   helm upgrade --install stt-bench charts/stt-bench -n stt-bench \
+#     -f <your-homelab-values>.yaml -f charts/stt-bench/values-colocated.yaml
+
+gatewayNodeSelector:
+  kubernetes.io/hostname: cezar-4090
+
+loadgen:
+  nodeSelector:
+    kubernetes.io/hostname: cezar-4090
+
+inferbench:
+  nodeSelector:
+    kubernetes.io/hostname: cezar-4090
+
+inference:
+  replicas: 3
+  nodeSelector:
+    kubernetes.io/hostname: cezar-4090

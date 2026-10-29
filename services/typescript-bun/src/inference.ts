@@ -60,6 +60,8 @@ export async function runInference(
   signal?: AbortSignal,
 ): Promise<Prediction> {
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const requestSignal =
+    signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal]);
 
   let response: Response;
   try {
@@ -67,7 +69,7 @@ export async function runInference(
       method: "POST",
       headers: { "x-cpu-passes": String(cpuPasses) },
       body,
-      signal: signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal]),
+      signal: requestSignal,
     });
   } catch (error) {
     throw classifyFetchError(error);
@@ -83,17 +85,40 @@ export async function runInference(
     });
   }
 
+  let payload: unknown;
   try {
-    return parsePrediction(await response.json());
+    payload = await response.json();
   } catch (error) {
-    throw new InferenceError({
-      stage: "inference_response_parse",
-      kind: "parse_error",
-      message: errorMessage(error),
-      inferenceStatus: null,
-      retryable: false,
-    });
+    // Bun 1.3.13: if the signal fires after headers arrived, the body read
+    // either rejects with TimeoutError or resolves to an empty body (seen as
+    // "Unexpected end of JSON input" despite a 200 with Content-Length). Both
+    // are timeouts; a body cut off by a dropped socket rejects with a non-
+    // SyntaxError (ECONNRESET). Only a SyntaxError on a live request is a
+    // genuine malformed-JSON response.
+    if (requestSignal.aborted) {
+      throw classifyFetchError(requestSignal.reason ?? error);
+    }
+    if (!(error instanceof SyntaxError)) {
+      throw classifyFetchError(error);
+    }
+    throw parseError(error);
   }
+
+  try {
+    return parsePrediction(payload);
+  } catch (error) {
+    throw parseError(error);
+  }
+}
+
+function parseError(error: unknown): InferenceError {
+  return new InferenceError({
+    stage: "inference_response_parse",
+    kind: "parse_error",
+    message: errorMessage(error),
+    inferenceStatus: null,
+    retryable: false,
+  });
 }
 
 function classifyStatus(status: number): ErrorKind {
