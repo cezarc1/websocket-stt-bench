@@ -81,7 +81,7 @@ jdk = "25"
 
 [java.dependencies]
 helidon = "4.3.0"
-jackson = "2.22.0"
+jackson = "2.22.3"
 junit = "5.11.4"
 errorprone = "2.51.0"
 nullaway = "0.14.3"
