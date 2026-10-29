@@ -57,9 +57,11 @@ defmodule SttGateway.Inference do
     :ok
   end
 
+  # The socket's `busy?` flag is only cleared by :compute_finished, so `run/6`
+  # must report on every path: nothing below may raise or exit.
   @spec call_inference(Finch.Request.t(), atom(), integer()) :: result()
   defp call_inference(request, finch_name, started_at) do
-    case Finch.request(request, finch_name, receive_timeout: 2_000, pool_timeout: 1_000) do
+    case safe_request(request, finch_name) do
       {:ok, %Finch.Response{status: 200, body: body}} ->
         decode_body(body, started_at)
 
@@ -70,14 +72,46 @@ defmodule SttGateway.Inference do
       {:error, error} ->
         Logger.warning("inference call failed: #{inspect(error)}")
         {:error, transport_error(error, started_at)}
+
+      {:crashed, message} ->
+        Logger.warning(message)
+        # No HTTP response was obtained, so this is a failed request at the
+        # transport layer (e.g. the Finch pool process exited). Like the Rust
+        # and Python gateways' fallback for unclassified request errors, that
+        # is reported as a retryable connection_reset.
+        {:error,
+         make_error_payload(:inference_request, :connection_reset, message, nil, started_at, true)}
     end
+  end
+
+  @spec safe_request(Finch.Request.t(), atom()) ::
+          {:ok, Finch.Response.t()} | {:error, Exception.t()} | {:crashed, String.t()}
+  defp safe_request(request, finch_name) do
+    Finch.request(request, finch_name, receive_timeout: 2_000, pool_timeout: 1_000)
+  catch
+    kind, reason ->
+      {:crashed, "inference request crashed: " <> Exception.format_banner(kind, reason)}
   end
 
   @spec decode_body(binary(), integer()) :: result()
   defp decode_body(body, started_at) do
     case JSON.decode(body) do
-      {:ok, decoded} ->
+      {:ok, decoded} when is_map(decoded) ->
         {:ok, build_result(decoded)}
+
+      {:ok, other} ->
+        message = "inference response is not a JSON object: #{inspect(other, limit: 5)}"
+        Logger.warning(message)
+
+        {:error,
+         make_error_payload(
+           :inference_response_parse,
+           :parse_error,
+           message,
+           200,
+           started_at,
+           false
+         )}
 
       {:error, decode_error} ->
         Logger.warning("inference response decode failed: #{inspect(decode_error)}")

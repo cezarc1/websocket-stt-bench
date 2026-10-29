@@ -2,6 +2,15 @@ import { type AppConfig, loadConfig } from "./config.ts";
 import { createInferenceRunner, type InferenceRunner } from "./inference.ts";
 import { SttSession } from "./session.ts";
 
+// Frames are 640 B PCM and start is a tiny JSON; the cap only has to be large
+// enough that oversized binary frames reach session.ts's own size check and
+// close 1003 per the shared contract. Bun (uWebSockets) does not hand frames
+// above maxPayloadLength to the handler: it drops the connection itself
+// (observed client-side as 1006, not 1003). So frames up to this cap,
+// which covers the conformance harness's 8193 and 65536 byte cases, get 1003;
+// anything larger cannot be mapped to 1003 by this gateway.
+export const MAX_PAYLOAD_BYTES = 128 * 1024;
+
 interface WebSocketData {
   config: AppConfig;
   inference: InferenceRunner;
@@ -24,11 +33,7 @@ export function startServer(config: AppConfig = loadConfig()): Bun.Server<WebSoc
       return new Response("not found", { status: 404 });
     },
     websocket: {
-      // Frames are 640 B PCM and start is a tiny JSON. Cap is generous so
-      // oversized binary frames hit our 1003 close path in session.ts
-      // rather than Bun's 1009 (Message Too Big), matching the shared
-      // close-code contract enforced by the other gateways.
-      maxPayloadLength: 8 * 1024,
+      maxPayloadLength: MAX_PAYLOAD_BYTES,
       backpressureLimit: 1024 * 1024,
       closeOnBackpressureLimit: false,
       open(ws) {

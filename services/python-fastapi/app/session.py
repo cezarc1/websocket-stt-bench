@@ -62,7 +62,15 @@ class SttSession:
             flusher = tg.create_task(self._flush_loop())
             writer = tg.create_task(self._writer_loop())
             try:
-                async for payload in self.websocket.iter_bytes():
+                while True:
+                    message = await self.websocket.receive()
+                    # Granian omits the "bytes" key on text frames, so
+                    # iter_bytes() would raise KeyError and close with no code.
+                    payload = message.get("bytes")
+                    if payload is None:
+                        if message["type"] != "websocket.disconnect":
+                            await self.websocket.close(code=1002, reason="text after start")
+                        return
                     if len(payload) != FRAME_BYTES:
                         await self.websocket.close(code=1003, reason="expected 640 byte PCM frame")
                         return

@@ -1,6 +1,24 @@
 # Go / net-http Benchmark Notes
 
-## Summary
+## 2026-10-28 homelab re-run (split nodes, correctness-verified)
+
+Split nodes: gateway + loadgen on node `cezar-4090`, one 6-CPU inference replica on node `2080` across the LAN; images tagged `gateway-fixes`. Every measured partial was verified client-side (exact stub values + per-session frame continuity) and `correctness_errors` was 0 on every point below. Same harness (`scripts/bench/run_point.sh`: 10 s warmup, 45 s measured, 30 s ramp, 1000 ms spread) and SLO; confirmed = 2/2 passes. Not directly comparable with the earlier single-node sections below, which are kept as history (see the README note).
+
+| Shape | Result | Bottleneck |
+|---|---:|---|
+| 1 vCPU / 2 GiB | 2500 confirmed (2/2) ↔ 2600 first fail | latency |
+| 2 vCPU / 2 GiB | 3900 confirmed (2/2) ↔ 4000 first fail | newest-p50 latency |
+
+Gateway fix on this branch: messages larger than 8 KiB were closed with 1009; they now get 1003 (binary) / 1002 (text). Built with Go 1.26.10.
+
+| Sessions | Result | Newest p50 / p95 | Oldest p50 / p95 |
+|---:|---|---:|---:|
+| 1 vCPU: 2500 | pass, confirmed (2/2) | 180-190 / 308-341 ms | 1163-1177 / 1268-1306 ms |
+| 1 vCPU: 2600 | fail, newest + oldest p50/p95 | 362 / 726 ms | 1341 / 1737 ms |
+| 2 vCPU: 3900 | pass, confirmed (2/2) | 154-157 / 260 ms | 1137-1140 / 1228 ms |
+| 2 vCPU: 4000 | fail, newest p50 | 202 / 342 ms | 1186 / 1318 ms |
+
+## Summary (earlier single-node runs)
 
 | Shape | Result | Bottleneck |
 |---|---:|---|

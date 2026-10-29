@@ -393,13 +393,20 @@ let reader_of_string s =
   Reader.of_pipe (Core.Info.of_string "ws-test") pr
 ;;
 
-(* Minimal RFC 6455 client frame: FIN=1, given opcode, masked, 7-bit length, 4-byte mask,
-   masked payload. [masked] lets a test deliberately send an (illegal) unmasked frame. *)
+(* Minimal RFC 6455 client frame: FIN=1, given opcode, masked, 7/16-bit length, 4-byte
+   mask, masked payload. [masked] lets a test deliberately send an (illegal) unmasked
+   frame. *)
 let client_frame ?(masked = true) ?(fin = true) ~opcode ~payload () =
   let len = String.length payload in
   let b = Buffer.create (6 + len) in
   Buffer.add_char b (Char.of_int_exn ((if fin then 0x80 else 0) lor (opcode land 0x0f)));
-  Buffer.add_char b (Char.of_int_exn ((if masked then 0x80 else 0) lor len));
+  let mask_bit = if masked then 0x80 else 0 in
+  if len < 126
+  then Buffer.add_char b (Char.of_int_exn (mask_bit lor len))
+  else (
+    Buffer.add_char b (Char.of_int_exn (mask_bit lor 126));
+    Buffer.add_char b (Char.of_int_exn (len lsr 8));
+    Buffer.add_char b (Char.of_int_exn (len land 0xff)));
   let mask = "\x12\x34\x56\x78" in
   if masked
   then (
@@ -448,6 +455,191 @@ let test_fragmented_control_frame_rejected () =
     | `Error _ -> ()
     | `Ok _ -> Alcotest.fail "fragmented control frame must be rejected"
     | `Eof -> Alcotest.fail "unexpected Eof")
+;;
+
+let expect_frame_error ~label bytes =
+  block (fun () ->
+    let open Async in
+    let%bind reader = reader_of_string bytes in
+    match%map WF.read reader with
+    | `Error _ -> ()
+    | `Ok _ -> Alcotest.failf "%s: must be rejected" label
+    | `Eof -> Alcotest.failf "%s: unexpected Eof" label)
+;;
+
+(* RFC 6455 §5.2: RSV1-3 must be 0 without a negotiated extension. *)
+let test_rsv_bits_rejected () =
+  let frame = client_frame ~opcode:2 ~payload:"x" () in
+  let rsv1 = Bytes.of_string frame in
+  Bytes.set rsv1 0 (Char.of_int_exn (Char.to_int frame.[0] lor 0x40));
+  expect_frame_error ~label:"RSV1 set" (Bytes.to_string rsv1)
+;;
+
+(* A 64-bit length with the MSB set used to read as a negative int and raise inside
+   [Bytes.create] (no close frame, wedged session) instead of yielding [`Error]. *)
+let test_64bit_length_msb_rejected () =
+  expect_frame_error
+    ~label:"64-bit length with MSB set"
+    ("\x82\xff\x80\x00\x00\x00\x00\x00\x00\x00" ^ "\x00\x00\x00\x00")
+;;
+
+let test_64bit_length_decodes () =
+  block (fun () ->
+    let open Async in
+    let payload = String.init 70_000 ~f:(fun i -> Char.of_int_exn (i land 0xff)) in
+    let header = Bytes.create 10 in
+    Bytes.set header 0 '\x82';
+    Bytes.set header 1 '\xff';
+    Stdlib.Bytes.set_int64_be header 2 (Int64.of_int (String.length payload));
+    (* All-zero mask: masked bytes == payload bytes. *)
+    let%bind reader =
+      reader_of_string (Bytes.to_string header ^ "\x00\x00\x00\x00" ^ payload)
+    in
+    match%map WF.read reader with
+    | `Ok frame ->
+      Alcotest.(check bool)
+        "64-bit payload intact"
+        true
+        (String.equal frame.payload payload)
+    | `Eof -> Alcotest.fail "unexpected Eof"
+    | `Error e -> Alcotest.failf "unexpected Error %s" e)
+;;
+
+let test_close_payload_validation () =
+  let check label expected payload =
+    Alcotest.(check bool) label expected (WF.valid_close_payload payload)
+  in
+  check "empty" true "";
+  check "1-byte body" false "\x03";
+  check "1000" true "\x03\xe8";
+  check "1000 + reason" true "\x03\xe8bye";
+  check "1005 never on the wire" false "\x03\xed";
+  check "999" false "\x03\xe7";
+  check "4999 app range" true "\x13\x87"
+;;
+
+(* Decode the unmasked server frames the gateway wrote, as (opcode, payload). *)
+let parse_server_frames s =
+  let rec go pos acc =
+    if pos >= String.length s
+    then List.rev acc
+    else (
+      let opcode = Char.to_int s.[pos] land 0x0f in
+      let len7 = Char.to_int s.[pos + 1] land 0x7f in
+      let len, hdr =
+        if len7 < 126
+        then len7, 2
+        else (Char.to_int s.[pos + 2] lsl 8) lor Char.to_int s.[pos + 3], 4
+      in
+      go (pos + hdr + len) ((opcode, String.sub s ~pos:(pos + hdr) ~len) :: acc))
+  in
+  go 0 []
+;;
+
+let close_code_of payload = (Char.to_int payload.[0] lsl 8) lor Char.to_int payload.[1]
+
+let test_config : Stt_ocaml_oxcaml.Config.t =
+  { port = 0
+  ; inference_host = "127.0.0.1"
+  ; inference_port = 9
+  ; inference_http_clients = 1
+  ; worker_threads = 1
+  ; flush_interval_ms = 1000
+  ; flush_phase_jitter_ms = 0
+  ; cpu_passes = 4
+  ; model_delay_ms = 75
+  }
+;;
+
+(* Feed [input] (concatenated client frames) through a full [Websocket_connection.run] and
+   return the server frames it wrote plus how long teardown took. No flush tick fires
+   (interval 1 s), so no inference request is made. *)
+let run_connection client_bytes =
+  block (fun () ->
+    let open Async in
+    let%bind reader = reader_of_string client_bytes in
+    let out_r, out_w = Pipe.create () in
+    let%bind writer, `Closed_and_flushed_downstream flushed =
+      Writer.of_pipe (Info.of_string "ws-test-out") out_w
+    in
+    (* Drain concurrently: the pipe-backed writer only flushes once its output is read. *)
+    let chunks = Pipe.to_list out_r in
+    let started = Time_ns.now () in
+    let%bind () =
+      Stt_ocaml_oxcaml.Websocket_connection.run
+        ~config:test_config
+        ~inference:(Stt_ocaml_oxcaml.Inference.create test_config)
+        ~diagnostics:Stt_ocaml_oxcaml.Diagnostics.disabled
+        ~reader
+        ~writer
+    in
+    let elapsed = Time_ns.diff (Time_ns.now ()) started in
+    let%bind () = Writer.close writer in
+    let%bind () = flushed in
+    let%map chunks in
+    parse_server_frames (String.concat chunks), elapsed)
+;;
+
+let start_json = {|{"type":"start"}|}
+
+(* RFC 6455 §5.4: a fragmented start (with a Ping interleaved) and a fragmented 640-byte
+   PCM frame must be reassembled. Pre-fix the 320-byte first fragment was taken as a whole
+   frame (→ 1003) and the start fragment as invalid JSON (→ 1002). Also checks the normal
+   client close is answered with 1000 and torn down well inside one flush interval. *)
+let test_fragmented_messages_reassembled () =
+  let pcm = String.make 640 '\x01' in
+  let input =
+    String.concat
+      [ client_frame ~fin:false ~opcode:1 ~payload:(String.prefix start_json 8) ()
+      ; client_frame ~opcode:9 ~payload:"p" ()
+      ; client_frame ~opcode:0 ~payload:(String.drop_prefix start_json 8) ()
+      ; client_frame ~fin:false ~opcode:2 ~payload:(String.prefix pcm 320) ()
+      ; client_frame ~opcode:0 ~payload:(String.drop_prefix pcm 320) ()
+      ; client_frame ~opcode:8 ~payload:"\x03\xe8" ()
+      ]
+  in
+  let frames, elapsed = run_connection input in
+  match frames with
+  | [ (10, "p"); (8, close) ] ->
+    Alcotest.(check int) "normal close code" 1000 (close_code_of close);
+    Alcotest.(check bool)
+      "teardown does not wait for the next flush tick"
+      true
+      Time_ns.Span.(elapsed < of_ms 500.)
+  | other ->
+    Alcotest.failf
+      "unexpected server frames: %s"
+      (String.concat
+         ~sep:","
+         (List.map other ~f:(fun (op, p) -> sprintf "op%d/%dB" op (String.length p))))
+;;
+
+let expect_close ~label ~code input =
+  match run_connection input with
+  | [ (8, close) ], _ -> Alcotest.(check int) label code (close_code_of close)
+  | frames, _ ->
+    Alcotest.failf
+      "%s: expected a single close frame, got %d frames"
+      label
+      (List.length frames)
+;;
+
+let test_fragmentation_violations_close_1002 () =
+  let start = client_frame ~opcode:1 ~payload:start_json () in
+  expect_close
+    ~label:"continuation without a fragmented message"
+    ~code:1002
+    (start ^ client_frame ~opcode:0 ~payload:"x" ());
+  expect_close
+    ~label:"new data frame mid-fragmented message"
+    ~code:1002
+    (start
+     ^ client_frame ~fin:false ~opcode:2 ~payload:"ab" ()
+     ^ client_frame ~opcode:2 ~payload:"cd" ());
+  expect_close
+    ~label:"1-byte close body"
+    ~code:1002
+    (start ^ client_frame ~opcode:8 ~payload:"\x03" ())
 ;;
 
 (* Regression guard for the timeout/cancellation fix: a silent inference server that never
@@ -567,6 +759,20 @@ let () =
             "fragmented control frame rejected"
             `Quick
             test_fragmented_control_frame_rejected
+        ; test_case "RSV bits rejected" `Quick test_rsv_bits_rejected
+        ; test_case "64-bit length MSB rejected" `Quick test_64bit_length_msb_rejected
+        ; test_case "64-bit length decodes" `Quick test_64bit_length_decodes
+        ; test_case "close payload validation" `Quick test_close_payload_validation
+        ] )
+    ; ( "websocket_connection"
+      , [ test_case
+            "fragmented messages reassembled"
+            `Quick
+            test_fragmented_messages_reassembled
+        ; test_case
+            "fragmentation violations close 1002"
+            `Quick
+            test_fragmentation_violations_close_1002
         ] )
     ; ( "inference_timeout"
       , [ test_case

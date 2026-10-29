@@ -933,7 +933,7 @@ def _write_slo_capacity_markdown(
         error_gate = (
             "error rate <= "
             f"{thresholds.max_error_rate:g} where error rate is "
-            "(protocol errors + inference errors + timeouts) / (partials + errors)"
+            "(failed sessions incl. timeouts + inference errors) / (partials + errors)"
         )
     lines = [
         "# SLO Capacity",
@@ -1102,6 +1102,17 @@ def _slo_points_by_service(
     return by_service
 
 
+def _distinct_errors(result: AnalysisResult) -> int:
+    """Failed sessions + gateway error frames, each failure counted once.
+
+    The loadgen bumps ``protocol_errors`` for every failed session *including*
+    timeouts, and ``timeouts.*`` is only a cause breakdown of that subset
+    (``loadgen/rust/src/main.rs::record_session_outcome``), so timeouts must not
+    be added again. ``max`` guards a summary that violates the invariant.
+    """
+    return max(result.protocol_errors, sum(result.timeouts.values())) + result.inference_errors
+
+
 def _evaluate_slo(result: AnalysisResult, thresholds: SloThresholds) -> SloEvaluation:
     reasons: list[str] = []
     if result.oldest_latency.p50_ms > thresholds.oldest_p50_ms:
@@ -1112,7 +1123,7 @@ def _evaluate_slo(result: AnalysisResult, thresholds: SloThresholds) -> SloEvalu
         reasons.append("oldest_p95")
     if result.newest_latency.p95_ms > thresholds.newest_p95_ms:
         reasons.append("newest_p95")
-    total_errors = result.protocol_errors + result.inference_errors + sum(result.timeouts.values())
+    total_errors = _distinct_errors(result)
     if thresholds.max_error_rate <= 0.0:
         # Strict-zero gate (any error fails).
         if result.protocol_errors > 0:
@@ -1151,7 +1162,7 @@ def _slo_result_sort_key(
     return (
         0 if evaluation.passes else 1,
         len(evaluation.reasons),
-        result.protocol_errors + sum(result.timeouts.values()),
+        _distinct_errors(result),
         result.oldest_latency.p50_ms,
         result.newest_latency.p50_ms,
         result.oldest_latency.p95_ms,

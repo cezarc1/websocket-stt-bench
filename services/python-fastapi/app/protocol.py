@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -44,7 +45,9 @@ class MessageType(StrEnum):
 class StartMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: MessageType = MessageType.START
+    # Required, not defaulted: `{}` is not a start message (matches the Rust
+    # gateway's tagged `ClientMessage`).
+    type: Literal[MessageType.START]
 
 
 class Prediction(BaseModel):

@@ -1,6 +1,28 @@
 # Rust / Axum Benchmark Notes
 
-## Summary
+## 2026-10-28 homelab re-run (split nodes, correctness-verified)
+
+Split nodes: gateway + loadgen on node `cezar-4090`, one 6-CPU inference replica on node `2080` across the LAN; images tagged `gateway-fixes`. Every measured partial was verified client-side (exact stub values + per-session frame continuity) and `correctness_errors` was 0 on every point below. Same harness (`scripts/bench/run_point.sh`: 10 s warmup, 45 s measured, 30 s ramp, 1000 ms spread) and SLO; confirmed = 2/2 passes. Not directly comparable with the earlier single-node sections below, which are kept as history (see the README note).
+
+| Shape | Result | Bottleneck |
+|---|---:|---|
+| 1 vCPU / 2 GiB | 3300 confirmed (2/2) ↔ 3400 (1 pass / 1 fail) | newest-p95 latency |
+| 2 vCPU / 2 GiB | 5350 confirmed (3/3) ↔ 5400 (1 pass / 1 fail) | newest-p50 latency |
+
+Gateway fix on this branch: a ping/pong before `start` no longer closes 1002.
+
+| Sessions | Result | Newest p50 / p95 | Oldest p50 / p95 |
+|---:|---|---:|---:|
+| 1 vCPU: 3300 | pass, confirmed (2/2) | 168-169 / 319-322 ms | 1156-1157 / 1318-1322 ms |
+| 1 vCPU: 3400 | 1 pass / 1 fail, newest p95 351 | 177-179 / 346-351 ms | 1167-1168 / 1347-1353 ms |
+| 1 vCPU: 3500 | fail, newest p50 + p95 | 201 / 407 ms | 1196 / 1417 ms |
+| 2 vCPU: 5350 | pass, confirmed (3/3) | 192-195 / 316-320 ms | 1175-1177 / 1312-1314 ms |
+| 2 vCPU: 5400 | 1 pass / 1 fail, newest p50 201 | 198-201 / 326-334 ms | 1180-1184 / 1322-1329 ms |
+| 2 vCPU: 5500 | fail, newest p50 | 205 / 346 ms | 1188 / 1341 ms |
+
+**A/B on 2 vCPU (why 4250 → 5350).** The `main` image on the same split setup passes 4250 and 5300 (single repeats), so the gain over the earlier 4250 is environmental, not the code change; the exact environmental cause is not isolated.
+
+## Summary (earlier single-node runs)
 
 | Shape | Result | Bottleneck |
 |---|---:|---|

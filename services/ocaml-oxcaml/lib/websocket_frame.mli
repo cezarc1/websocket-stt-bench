@@ -6,10 +6,10 @@
     binary payloads for 640-byte PCM frames, ping/pong, and close.
 
     {!read} enforces RFC 6455 §5.1: an unmasked client frame yields [`Error] (the server
-    layer turns that into a 1002 close). Frames larger than 1 GiB also yield [`Error].
-    Fragmentation/continuation handling is intentionally absent — the server treats a
-    [Continuation] opcode as a protocol violation since this benchmark never negotiates
-    fragmented frames. *)
+    layer turns that into a 1002 close). Non-zero RSV bits, a 64-bit length with the MSB
+    set, and frames larger than 1 GiB also yield [`Error]. This layer is per-frame:
+    reassembly of fragmented messages ([fin = false] + [Continuation]) is done by
+    {!Websocket_connection}. *)
 
 type opcode =
   | Continuation
@@ -38,3 +38,7 @@ val text : string -> t
 val binary : string -> t
 val close : ?code:int -> unit -> t
 val pong : string -> t
+
+(** [true] iff a received Close payload is well-formed (empty, or a valid 2-byte status
+    code optionally followed by a reason). *)
+val valid_close_payload : string -> bool

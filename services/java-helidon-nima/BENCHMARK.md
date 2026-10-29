@@ -1,6 +1,29 @@
 # Java / Helidon Níma Benchmark Notes
 
-## Summary
+## 2026-10-28 homelab re-run (split nodes, correctness-verified)
+
+Split nodes: gateway + loadgen on node `cezar-4090`, one 6-CPU inference replica on node `2080` across the LAN; images tagged `gateway-fixes`. Every measured partial was verified client-side (exact stub values + per-session frame continuity) and `correctness_errors` was 0 on every point below. Same harness (`scripts/bench/run_point.sh`: 10 s warmup, 45 s measured, 30 s ramp, 1000 ms spread) and SLO; confirmed = 2/2 passes. Not directly comparable with the earlier single-node sections below, which are kept as history (see the README note).
+
+| Shape | Result | Bottleneck |
+|---|---:|---|
+| 1 vCPU / 2 GiB | 2300 confirmed (2/2) ↔ 2400 (1 pass / 1 fail) | connect timeouts, then tail latency |
+| 2 vCPU / 2 GiB | 3600 confirmed (2/2) ↔ 3650 first fail | connect timeouts, then send timeouts |
+
+Gateway fixes on this branch: fragmented messages are reassembled; Helidon sends (not thread-safe) are serialized behind a bounded-wait lock; pings get pongs; unexpected flush exceptions become error frames.
+
+| Sessions | Result | Newest p50 / p95 | Oldest p50 / p95 |
+|---:|---|---:|---:|
+| 1 vCPU: 2300 | pass, confirmed (2/2) | 107-108 / 206-211 ms | 1086 / 1236-1243 ms |
+| 1 vCPU: 2400 | 1 pass / 1 fail (2 connect timeouts) | 111 / 231-241 ms | 1090-1091 / 1264-1271 ms |
+| 1 vCPU: 2500 | 1 pass / 1 fail (5 connect timeouts) | 115-137 / 258-298 ms | 1094-1122 / 1293-1334 ms |
+| 1 vCPU: 2600 | fail, latency + 5 connect timeouts | 303 / 3619 ms | 1314 / 6136 ms |
+| 2 vCPU: 3600 | pass, confirmed (2/2) | 111-112 / 195-214 ms | 1090-1092 / 1207-1228 ms |
+| 2 vCPU: 3650 | fail, 3 connect timeouts | 114 / 221 ms | 1092 / 1245 ms |
+| 2 vCPU: 3800 | fail, tail latency + send timeouts | 168 / 1503 ms | 1149 / 2560 ms |
+
+The 1-vCPU edge fails on a handful of connect timeouts (above the 1/100k error budget) while latency still passes; the earlier heap/OOM cliff was not hit in this run's sweep.
+
+## Summary (earlier single-node runs)
 
 | Shape | Result | Bottleneck |
 |---|---:|---|

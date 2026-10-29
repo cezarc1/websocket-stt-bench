@@ -33,6 +33,10 @@ pub enum Cmd {
     /// A batch is ready; run one inference for `owner`.
     Submit {
         owner: usize,
+        /// Identifies *which* of `owner`'s batches this is (its oldest
+        /// frame seq). Echoed in [`Done`] so thread A can discard a result
+        /// that lands after it already timed the batch out locally.
+        tag: u64,
         body: Vec<u8>,
         cpu_passes: u32,
     },
@@ -41,8 +45,9 @@ pub enum Cmd {
     Abort { owner: usize },
 }
 
-/// Thread B → thread A. Delivered to the owning `Conn::deliver`.
-pub type Done = (usize, Result<InferResponse, InferError>);
+/// Thread B → thread A: `(owner, tag, result)`. Delivered to the owning
+/// `Conn::on_done`, which drops it unless `tag` is the batch still pending.
+pub type Done = (usize, u64, Result<InferResponse, InferError>);
 
 const B_WAKE: Token = Token(0);
 
@@ -103,6 +108,7 @@ struct Slot {
     sock: Option<TcpStream>,
     state: State,
     owner: Option<usize>,
+    tag: u64,
     req: Vec<u8>,
     resp: Vec<u8>,
     started: Instant,
@@ -117,6 +123,7 @@ impl Slot {
             sock: None,
             state: State::Disconnected,
             owner: None,
+            tag: 0,
             req: Vec::with_capacity(64 * crate::config::FRAME_BYTES),
             resp: Vec::with_capacity(512),
             started: Instant::now(),
@@ -271,6 +278,9 @@ impl Slot {
     fn retry_or_fail(&mut self, e: &io::Error) -> Step {
         if !self.retried && self.sock.is_some() {
             self.retried = true;
+            // Drop any half-received response from the dead socket so the
+            // resend's response is parsed from its own first byte.
+            self.resp.clear();
             self.state = State::Sending { off: 0 };
             self.sock = None;
             return Step::Redial;
@@ -324,23 +334,25 @@ impl InferencePool {
     fn submit(
         &mut self,
         owner: usize,
+        tag: u64,
         body: &[u8],
         cpu_passes: u32,
         config: &Config,
         reg: &Registry,
     ) -> Option<Done> {
         let Some(idx) = self.free.pop() else {
-            return Some((owner, Err(reset_error())));
+            return Some((owner, tag, Err(reset_error())));
         };
         let slot = &mut self.slots[idx];
         slot.owner = Some(owner);
+        slot.tag = tag;
         slot.build(config, body, cpu_passes);
         if slot.sock.is_some() {
             slot.state = State::Sending { off: 0 };
         } else if slot.dial(self.addr).is_err() {
             slot.owner = None;
             self.free.push(idx);
-            return Some((owner, Err(reset_error())));
+            return Some((owner, tag, Err(reset_error())));
         }
         slot.ensure_registered(reg, pool_token(idx), Interest::WRITABLE);
         None
@@ -363,16 +375,18 @@ impl InferencePool {
             Step::Redial => {
                 if slot.dial(self.addr).is_err() {
                     let owner = slot.owner.take();
+                    let tag = slot.tag;
                     self.recycle(idx, reg);
-                    return owner.map(|o| (o, Err(reset_error())));
+                    return owner.map(|o| (o, tag, Err(reset_error())));
                 }
                 slot.ensure_registered(reg, pool_token(idx), Interest::WRITABLE);
                 None
             }
             Step::Done(result) => {
                 let owner = slot.owner.take();
+                let tag = slot.tag;
                 self.recycle(idx, reg);
-                owner.map(|o| (o, result))
+                owner.map(|o| (o, tag, result))
             }
         }
     }
@@ -419,9 +433,10 @@ pub struct InferHandle {
 }
 
 impl InferHandle {
-    pub fn submit(&self, owner: usize, body: Vec<u8>, cpu_passes: u32) {
+    pub fn submit(&self, owner: usize, tag: u64, body: Vec<u8>, cpu_passes: u32) {
         let _ = self.tx.send(Cmd::Submit {
             owner,
+            tag,
             body,
             cpu_passes,
         });
@@ -514,11 +529,12 @@ fn run(
             match cmd {
                 Cmd::Submit {
                     owner,
+                    tag,
                     body,
                     cpu_passes,
                 } => {
                     if let Some(done) =
-                        pool.submit(owner, &body, cpu_passes, &config, poll.registry())
+                        pool.submit(owner, tag, &body, cpu_passes, &config, poll.registry())
                         && done_tx.send(done).is_ok()
                     {
                         produced = true;
@@ -621,4 +637,24 @@ fn classify_status(status: u16) -> (ErrorKind, bool) {
 
 fn kind_retryable(kind: ErrorKind) -> bool {
     !matches!(kind, ErrorKind::ParseError)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: a socket that dies mid-response must not leave its
+    /// partial bytes in front of the resend's response.
+    #[test]
+    fn redial_discards_half_received_response() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut slot = Slot::new();
+        slot.sock = Some(TcpStream::connect(listener.local_addr().unwrap()).unwrap());
+        slot.resp
+            .extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Length: 90\r\n\r\n{\"rms\":");
+        let step = slot.retry_or_fail(&io::ErrorKind::ConnectionReset.into());
+        assert!(matches!(step, Step::Redial));
+        assert!(slot.resp.is_empty());
+        assert!(slot.sock.is_none());
+    }
 }

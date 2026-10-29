@@ -59,6 +59,14 @@ pub struct Batch {
     flush_lateness_ms: f64,
 }
 
+impl Batch {
+    /// Unique per connection (seqs strictly increase), so it identifies
+    /// this batch's inference request across the thread handoff.
+    pub fn tag(&self) -> u64 {
+        self.oldest_seq
+    }
+}
+
 struct Pending {
     batch: Batch,
     started: Instant,
@@ -112,6 +120,20 @@ impl Conn {
         match &self.pending {
             Some(p) => (p.started + INFERENCE_TIMEOUT).min(self.next_flush),
             None => self.next_flush,
+        }
+    }
+
+    /// Dispatch one epoll event. mio is edge-triggered, so an event that
+    /// is both readable and writable must still drain the read side —
+    /// otherwise a client Close (or the last frames) that arrived alongside
+    /// send-buffer space is never read. `on_readable` also flushes.
+    pub fn on_ready(&mut self, reg: &Registry, readable: bool, writable: bool) -> Outcome {
+        if readable {
+            self.on_readable(reg)
+        } else if writable {
+            self.on_writable(reg)
+        } else {
+            Outcome::Keep
         }
     }
 
@@ -210,6 +232,23 @@ impl Conn {
     /// this to decide whether a closing connection needs an `infer.abort`.
     pub fn has_pending(&self) -> bool {
         self.pending.is_some()
+    }
+
+    /// Thread B finished the request tagged `tag`. After a local timeout
+    /// the next batch may already be pending when the abandoned request's
+    /// late result arrives; delivering it would attach the old batch's
+    /// stats to the new batch's seq range, so a non-matching tag is dropped.
+    pub fn on_done(
+        &mut self,
+        reg: &Registry,
+        tag: u64,
+        result: Result<InferResponse, InferError>,
+        c: &Config,
+    ) -> Outcome {
+        match &self.pending {
+            Some(p) if p.batch.tag() == tag => self.deliver(reg, result, c),
+            _ => Outcome::Keep,
+        }
     }
 
     /// Inference finished (or errored / timed out): emit the partial.
@@ -345,4 +384,149 @@ impl Conn {
 
 fn ms(now: Instant, earlier: Instant) -> f64 {
     now.saturating_duration_since(earlier).as_secs_f64() * 1000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream as StdStream};
+    use std::time::Duration;
+
+    use mio::Poll;
+
+    use super::*;
+
+    fn config() -> Config {
+        Config {
+            port: 0,
+            inference_host: "127.0.0.1".to_owned(),
+            inference_port: 9,
+            inference_path: "/infer".to_owned(),
+            inference_clients: 1,
+            cpu_passes: 4,
+            model_delay_ms: 75,
+            flush_interval: Duration::from_millis(1000),
+            flush_phase_jitter: Duration::ZERO,
+        }
+    }
+
+    /// A registered server-side `Conn` plus the client end of the socket.
+    fn conn_pair(poll: &Poll) -> (Conn, StdStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = StdStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        server.set_nonblocking(true).unwrap();
+        let mut stream = TcpStream::from_std(server);
+        poll.registry()
+            .register(&mut stream, ws_token(7), Interest::READABLE)
+            .unwrap();
+        (Conn::new(7, stream, &config()), client)
+    }
+
+    fn push_frames(conn: &mut Conn, n: usize) {
+        for _ in 0..n {
+            conn.seq += 1;
+            conn.pcm.extend_from_slice(&[0u8; FRAME_BYTES]);
+            conn.meta.push(FrameMeta {
+                seq: conn.seq,
+                received_at: Instant::now(),
+            });
+        }
+    }
+
+    fn flush_now(conn: &mut Conn, now: Instant) -> Batch {
+        conn.next_flush = now;
+        match conn.on_timer(now, &config()) {
+            Tick::Flush(batch) => batch,
+            _ => panic!("expected a flush"),
+        }
+    }
+
+    fn infer_ok() -> Result<InferResponse, InferError> {
+        Ok(InferResponse {
+            rms: 0.0,
+            zero_crossings: 0,
+            checksum: 0,
+            samples: 0,
+            transcript: "now".to_owned(),
+            audio_bytes: 0,
+        })
+    }
+
+    /// Regression: after a local timeout the next batch is submitted; the
+    /// abandoned request's late `Done` must not be attributed to it.
+    #[test]
+    fn late_result_of_timed_out_batch_is_dropped() {
+        let poll = Poll::new().unwrap();
+        let (mut conn, _client) = conn_pair(&poll);
+        let reg = poll.registry();
+        let c = config();
+        let now = Instant::now();
+
+        push_frames(&mut conn, 3);
+        let first = flush_now(&mut conn, now);
+        let first_tag = first.tag();
+        conn.begin_pending(first, now.checked_sub(INFERENCE_TIMEOUT).unwrap());
+        let Tick::Timeout(elapsed) = conn.on_timer(now, &c) else {
+            panic!("expected timeout");
+        };
+        conn.deliver(reg, Err(crate::inference::timeout_error(elapsed)), &c);
+        assert!(!conn.has_pending());
+
+        push_frames(&mut conn, 2);
+        let second = flush_now(&mut conn, now);
+        let second_tag = second.tag();
+        assert_eq!((first_tag, second_tag), (1, 4));
+        conn.begin_pending(second, now);
+
+        conn.on_done(reg, first_tag, infer_ok(), &c);
+        assert!(conn.has_pending(), "stale result consumed the new batch");
+        conn.on_done(reg, second_tag, infer_ok(), &c);
+        assert!(!conn.has_pending());
+    }
+
+    /// Regression: an edge-triggered event that is readable *and* writable
+    /// must still read, or a client Close arriving with it is never seen.
+    #[test]
+    fn readable_and_writable_event_still_reads_close() {
+        let poll = Poll::new().unwrap();
+        let (mut conn, mut client) = conn_pair(&poll);
+        let reg = poll.registry();
+        client
+            .write_all(
+                b"GET /ws/stt HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+                  Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+            )
+            .unwrap();
+        for _ in 0..200 {
+            if conn.ws.is_some() {
+                break;
+            }
+            assert!(matches!(conn.on_ready(reg, true, false), Outcome::Keep));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(conn.ws.is_some(), "handshake did not complete");
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            client.read_exact(&mut byte).unwrap();
+            head.push(byte[0]);
+        }
+
+        let mut ws = WebSocket::from_raw_socket(client, Role::Client, None);
+        ws.send(Message::Text(r#"{"type":"start"}"#.into()))
+            .unwrap();
+        ws.close(None).unwrap();
+
+        let mut closed = false;
+        for _ in 0..200 {
+            if matches!(conn.on_ready(reg, true, true), Outcome::Close) {
+                closed = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(conn.started, "start message was not read");
+        assert!(closed, "client Close was not processed");
+    }
 }

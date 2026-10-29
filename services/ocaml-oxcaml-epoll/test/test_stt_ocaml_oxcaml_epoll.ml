@@ -139,6 +139,20 @@ let test_websocket_rejects_negative_64_bit_length () =
   | Ok (Some _) -> Alcotest.fail "negative 64-bit length must not parse"
 ;;
 
+let test_websocket_rejects_reserved_bits () =
+  List.iter
+    (fun rsv ->
+      let frame = Bytes.make 6 '\000' in
+      Bytes.set frame 0 (Char.chr (0x80 lor rsv lor 0x2));
+      Bytes.set frame 1 (Char.chr 0x80);
+      match
+        Stt_ocaml_oxcaml_epoll.Ws.parse_one frame ~pos:0 ~len:(Bytes.length frame)
+      with
+      | Error _ -> ()
+      | Ok _ -> Alcotest.failf "RSV bits 0x%02x must be a protocol error" rsv)
+    [ 0x40; 0x20; 0x10 ]
+;;
+
 let test_mask_copy_unmasked_640_preserves_offsets () =
   let payload = Bytes.init 640 (fun i -> Char.chr (i * 17 land 0xff)) in
   let mask = Bytes.of_string "\017\034\051\068" in
@@ -375,6 +389,10 @@ let () =
             "websocket rejects negative 64-bit length"
             `Quick
             test_websocket_rejects_negative_64_bit_length
+        ; Alcotest.test_case
+            "websocket rejects reserved bits"
+            `Quick
+            test_websocket_rejects_reserved_bits
         ; Alcotest.test_case
             "mask copy unmasked 640 preserves offsets"
             `Quick

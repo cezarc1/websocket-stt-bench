@@ -238,9 +238,16 @@ let run_flush_loop t =
         let delta = Time_ns.diff expected_at now in
         if Time_ns.Span.( < ) delta Time_ns.Span.zero then Time_ns.Span.zero else delta
       in
-      let%bind () = Clock_ns.after wait in
-      let%bind () = perform_flush t ~expected_at in
-      loop (Time_ns.add expected_at step))
+      (* Also wake on close, so a torn-down session releases its inference connection
+         promptly instead of lagging up to one flush interval. *)
+      let%bind () = Deferred.any_unit [ Clock_ns.after wait; Pipe.closed t.outbound ] in
+      (* Re-check after the sleep: a session closed mid-wait must not POST its leftover
+         buffer to the inference server for a result nobody will receive. *)
+      if Pipe.is_closed t.outbound
+      then Inference.close_conn t.inf_conn
+      else (
+        let%bind () = perform_flush t ~expected_at in
+        loop (Time_ns.add expected_at step)))
   in
   loop start
 ;;

@@ -195,7 +195,7 @@ void register_routes(uWS::App& app, LoopState& loop_state) {
 
     uWS::App::WebSocketBehavior<PerSocketData> behavior{};
     behavior.compression = uWS::DISABLED;
-    behavior.maxPayloadLength = 16 * 1024;
+    behavior.maxPayloadLength = MAX_WS_MESSAGE_BYTES;
     behavior.idleTimeout = 0;
     behavior.maxBackpressure = 1024 * 1024;
 

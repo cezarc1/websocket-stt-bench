@@ -501,6 +501,47 @@ def test_balanced_realtime_slo_error_budget_passes_below_threshold(tmp_path: Pat
     assert row["limiting_reasons"] == ""
 
 
+def test_balanced_realtime_slo_error_budget_does_not_double_count_timeouts(
+    tmp_path: Path,
+) -> None:
+    """A timed-out session is in protocol_errors AND timeouts; count it once.
+
+    1 / 201 = 5.0e-3 passes a 7e-3 budget; double-counted 2 / 202 = 9.9e-3 would fail.
+    """
+    result_dir = tmp_path / "results"
+    out_dir = result_dir / "analysis"
+    result_dir.mkdir()
+    write_summary(
+        result_dir / "python-fastapi-stock-single-50s-10w-45m-r1.summary.json",
+        "python-fastapi-stock-single",
+        sessions=50,
+        warmup_secs=10,
+        measure_secs=45,
+        protocol_errors=1,
+        timeouts={"connect": 1, "send": 0, "close": 0, "session": 0},
+    )
+    write_samples(
+        result_dir / "python-fastapi-stock-single-50s-10w-45m-r1.samples.csv",
+        newest_latency_ms=[100.0 + (i % 50) for i in range(200)],
+        oldest_latency_ms=[300.0 + (i % 80) for i in range(200)],
+        flush_lateness_ms=[1.0 + (i % 10) * 0.1 for i in range(200)],
+    )
+
+    analyze_directory(
+        AnalysisOptions(
+            input_dir=result_dir,
+            out_dir=out_dir,
+            slo_profile="balanced-realtime",
+            max_error_rate=7e-3,
+        )
+    )
+
+    with (out_dir / "slo_capacity.csv").open(newline="", encoding="utf-8") as handle:
+        row = next(csv.DictReader(handle))
+    assert row["highest_passing_sessions"] == "50"
+    assert row["limiting_reasons"] == ""
+
+
 def test_balanced_realtime_slo_error_budget_fails_above_threshold(tmp_path: Path) -> None:
     """50 errors in 100 partials (rate ~0.33) exceeds 1e-2 budget; fails with "error_rate"."""
     result_dir = tmp_path / "results"

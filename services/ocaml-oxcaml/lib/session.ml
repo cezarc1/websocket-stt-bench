@@ -454,15 +454,17 @@ let run_flush_loop t =
   let start = jittered_start t in
   let step = Time_ns.Span.of_ms (Float.of_int t.config.flush_interval_ms) in
   let rec loop expected_at =
+    let now = Time_ns.now () in
+    let wait =
+      let delta = Time_ns.diff expected_at now in
+      if Time_ns.Span.( < ) delta Time_ns.Span.zero then Time_ns.Span.zero else delta
+    in
+    (* Also wake on close so connection teardown (and the TCP close, which waits on this
+       loop) is prompt instead of lagging up to one flush interval. *)
+    let%bind () = Deferred.any_unit [ Clock_ns.after wait; Pipe.closed t.outbound ] in
     if Pipe.is_closed t.outbound
     then Inference.close_conn t.inf_conn
     else (
-      let now = Time_ns.now () in
-      let wait =
-        let delta = Time_ns.diff expected_at now in
-        if Time_ns.Span.( < ) delta Time_ns.Span.zero then Time_ns.Span.zero else delta
-      in
-      let%bind () = Clock_ns.after wait in
       let%bind () = perform_flush t ~expected_at in
       loop (Time_ns.add expected_at step))
   in

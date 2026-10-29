@@ -2,6 +2,7 @@ module Epoll = Stt_ocaml_oxcaml_epoll_linux.Epoll
 module Config = Stt_ocaml_oxcaml_epoll_linux.Config
 module Server = Stt_ocaml_oxcaml_epoll_linux.Server
 module Int_stack = Stt_ocaml_oxcaml_epoll.Int_stack
+module Ws = Stt_ocaml_oxcaml_epoll.Ws
 
 let config clients : Config.t =
   { port = 0
@@ -221,6 +222,172 @@ let test_http_4xx_response_is_non_retryable_and_closes_slot () =
       (Int_stack.length s.free_slots))
 ;;
 
+let mask = "\001\002\003\004"
+
+let masked_frame byte0 payload =
+  let len = String.length payload in
+  let ext = if len < 126 then 0 else 2 in
+  let b = Bytes.create (2 + ext + 4 + len) in
+  Bytes.set b 0 (Char.chr byte0);
+  if len < 126
+  then Bytes.set b 1 (Char.chr (0x80 lor len))
+  else (
+    Bytes.set b 1 (Char.chr (0x80 lor 126));
+    Bytes.set_uint16_be b 2 len);
+  Bytes.blit_string mask 0 b (2 + ext) 4;
+  String.iteri
+    (fun i ch ->
+      Bytes.set
+        b
+        (2 + ext + 4 + i)
+        (Char.chr (Char.code ch lxor Char.code mask.[i land 3])))
+    payload;
+  Bytes.unsafe_to_string b
+;;
+
+let pcm_frame seq = String.init 640 (fun i -> Char.chr (((seq * 31) + i) land 0xff))
+let start_frame = masked_frame 0x81 {|{"type":"start"}|}
+
+(* An open WebSocket connection registered with epoll, so enqueue paths can [mod_] it. *)
+let with_open_conn ?(started = true) s f =
+  let peer, fd = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  let c = Server.create_conn s fd in
+  c.state <- Server.Open;
+  c.started <- started;
+  Hashtbl.add s.Server.conns c.id c;
+  Epoll.add s.epoll fd ~events:(Server.conn_events c) ~token:(Server.conn_token c.id);
+  Fun.protect ~finally:(fun () -> close_quiet peer) (fun () -> f c)
+;;
+
+let feed s (c : Server.conn) data =
+  Server.append_string c.input data;
+  Server.process_frames s c
+;;
+
+let output (c : Server.conn) =
+  Bytes.sub_string c.output.out c.output.out_pos (c.output.out_len - c.output.out_pos)
+;;
+
+let reset_output (c : Server.conn) =
+  c.output.out_pos <- 0;
+  c.output.out_len <- 0
+;;
+
+let test_invalid_binary_sizes_close_1003 () =
+  List.iter
+    (fun size ->
+      with_server 1 (fun s ->
+        with_open_conn s (fun c ->
+          feed s c (masked_frame 0x82 (String.make size 'a'));
+          Alcotest.(check string)
+            (Printf.sprintf "%d-byte frame closes 1003" size)
+            (Ws.close ~code:1003 ())
+            (output c);
+          Alcotest.(check int) "no frame recorded" 0 c.seq;
+          Alcotest.(check bool) "closing" true c.close_after_write)))
+    [ 0; 10; 639; 641 ]
+;;
+
+let test_640_frames_split_across_reads_keep_order () =
+  with_server 1 (fun s ->
+    with_open_conn ~started:false s (fun c ->
+      let f1 = masked_frame 0x82 (pcm_frame 1) in
+      let f2 = masked_frame 0x82 (pcm_frame 2) in
+      feed s c (start_frame ^ f1 ^ String.sub f2 0 300);
+      Alcotest.(check bool) "started" true c.started;
+      Alcotest.(check int) "first frame recorded" 1 c.seq;
+      feed s c (String.sub f2 300 (String.length f2 - 300));
+      Alcotest.(check int) "second frame recorded" 2 c.seq;
+      Alcotest.(check int) "batch oldest" 1 c.batch_oldest_seq;
+      Alcotest.(check int) "batch newest" 2 c.batch_newest_seq;
+      Alcotest.(check string)
+        "pcm is frames concatenated in seq order"
+        (pcm_frame 1 ^ pcm_frame 2)
+        (Bytes.sub_string c.pcm.data 0 c.pcm.len);
+      Alcotest.(check string) "nothing written" "" (output c)))
+;;
+
+let test_fragmented_data_frames_close_1002 () =
+  with_server 1 (fun s ->
+    with_open_conn s (fun c ->
+      feed s c (masked_frame 0x02 (pcm_frame 1));
+      Alcotest.(check string)
+        "non-FIN binary closes 1002"
+        (Ws.close ~code:1002 ())
+        (output c);
+      Alcotest.(check int) "fragment not recorded as a frame" 0 c.seq));
+  with_server 1 (fun s ->
+    with_open_conn ~started:false s (fun c ->
+      feed s c (masked_frame 0x01 {|{"type":"start"}|});
+      Alcotest.(check string)
+        "non-FIN start closes 1002"
+        (Ws.close ~code:1002 ())
+        (output c);
+      Alcotest.(check bool) "not started" false c.started))
+;;
+
+let test_pool_exhausted_error_consumes_its_batch () =
+  with_server 1 (fun s ->
+    ignore (pop_free_slot s : int);
+    with_open_conn s (fun c ->
+      feed s c (masked_frame 0x82 (pcm_frame 1) ^ masked_frame 0x82 (pcm_frame 2));
+      Server.flush_conn s c (Server.now_ms ());
+      let out = output c in
+      Alcotest.(check bool) "error frame" true (contains out {|"type":"error"|});
+      Alcotest.(check bool)
+        "error covers 1..=2"
+        true
+        (contains out {|"oldest_frame_seq":1,"newest_frame_seq":2,"frames":2|});
+      Alcotest.(check int) "batch drained" 0 c.batch_frames;
+      Alcotest.(check int) "pcm drained" 0 c.pcm.len;
+      reset_output c;
+      feed s c (masked_frame 0x82 (pcm_frame 3));
+      Server.flush_conn s c (Server.now_ms ());
+      Alcotest.(check bool)
+        "next range starts after the error's range"
+        true
+        (contains (output c) {|"oldest_frame_seq":3,"newest_frame_seq":3|})))
+;;
+
+let test_no_data_frames_after_close () =
+  with_server 1 (fun s ->
+    with_open_conn s (fun c ->
+      feed s c (masked_frame 0x82 (pcm_frame 1));
+      let pending : Server.pending =
+        { oldest_seq = 1
+        ; newest_seq = 1
+        ; oldest_ms = 0.0
+        ; newest_ms = 0.0
+        ; frames = 1
+        ; audio_bytes = 640
+        ; flush_lateness_ms = 0.0
+        ; started_ms = 0.0
+        ; timeout_gen = 1
+        }
+      in
+      c.pending <- Some pending;
+      Server.enqueue_close s c 1000;
+      Server.deliver_result
+        s
+        c.id
+        (Ok
+           { rms = 1.0
+           ; zero_crossings = 1
+           ; checksum = 1
+           ; samples = 320
+           ; transcript = "now"
+           ; audio_bytes = 640
+           });
+      Alcotest.(check string) "only the close frame" (Ws.close ~code:1000 ()) (output c);
+      let free = Int_stack.length s.free_slots in
+      Server.flush_conn s c (Server.now_ms ());
+      Alcotest.(check int) "no inference submitted" free (Int_stack.length s.free_slots);
+      Alcotest.(check string)
+        "still only the close frame"
+        (Ws.close ~code:1000 ())
+        (output c)))
+;;
+
 let () =
   Alcotest.run
     "stt-ocaml-oxcaml-epoll-linux"
@@ -249,6 +416,26 @@ let () =
             "HTTP 4xx response is non-retryable and closes slot"
             `Quick
             test_http_4xx_response_is_non_retryable_and_closes_slot
+        ; Alcotest.test_case
+            "invalid binary sizes close 1003"
+            `Quick
+            test_invalid_binary_sizes_close_1003
+        ; Alcotest.test_case
+            "640 frames split across reads keep order"
+            `Quick
+            test_640_frames_split_across_reads_keep_order
+        ; Alcotest.test_case
+            "fragmented data frames close 1002"
+            `Quick
+            test_fragmented_data_frames_close_1002
+        ; Alcotest.test_case
+            "pool exhausted error consumes its batch"
+            `Quick
+            test_pool_exhausted_error_consumes_its_batch
+        ; Alcotest.test_case
+            "no data frames after close"
+            `Quick
+            test_no_data_frames_after_close
         ] )
     ]
 ;;

@@ -1,7 +1,6 @@
 #include "session.hpp"
 
 #include <cstddef>
-#include <ranges>
 #include <string>
 #include <utility>
 
@@ -64,16 +63,11 @@ void Session::on_binary(std::span<const std::byte> payload) {
         fail_protocol(CLOSE_UNSUPPORTED_DATA, REASON_BAD_FRAME_SIZE);
         return;
     }
-    const auto bytes = payload.first<FRAME_BYTES>();
-    const auto now = std::chrono::steady_clock::now();
-    if (buffer_.size() < MAX_BUFFERED_FRAMES) {
-        buffer_.emplace_back(++seq_, bytes, now);
-        return;
-    }
-    // Full (inference is backed up): overwrite the oldest frame in place.
-    buffer_[head_].assign(++seq_, bytes, now);
-    head_ = (head_ + 1) % buffer_.size();
-    ++dropped_frames_;
+    // Unbounded, like the reference gateways: every frame the client sends is
+    // owed in some partial or error frame. Growth is bounded in practice by the
+    // one-in-flight guard plus the inference timeout (the in-flight request
+    // completes or fails within `inference_timeout`, then the backlog drains).
+    buffer_.emplace_back(++seq_, payload.first<FRAME_BYTES>(), std::chrono::steady_clock::now());
 }
 
 void Session::on_flush_tick(std::chrono::steady_clock::time_point now) {
@@ -93,20 +87,15 @@ void Session::on_flush_tick(std::chrono::steady_clock::time_point now) {
 
     // Build the body in the scratch vector. Its capacity comes back with each
     // completion, so it converges at ~50 frames of PCM (~32 KiB) and stays out
-    // of the allocator. Frames are appended oldest first: [head_, end) then
-    // [0, head_).
+    // of the allocator. Frames are appended in seq (arrival) order.
     body_scratch_.clear();
     body_scratch_.reserve(buffer_.size() * FRAME_BYTES);
-    const auto split = buffer_.begin() + static_cast<std::ptrdiff_t>(head_);
-    for (const auto& frame : std::ranges::subrange(split, buffer_.end())) {
-        body_scratch_.append_range(frame.payload);
-    }
-    for (const auto& frame : std::ranges::subrange(buffer_.begin(), split)) {
+    for (const auto& frame : buffer_) {
         body_scratch_.append_range(frame.payload);
     }
 
-    const auto& oldest = oldest_frame();
-    const auto& newest = newest_frame();
+    const auto& oldest = buffer_.front();
+    const auto& newest = buffer_.back();
     const BatchContext ctx{
         .oldest_seq = oldest.seq,
         .newest_seq = newest.seq,
@@ -120,7 +109,6 @@ void Session::on_flush_tick(std::chrono::steady_clock::time_point now) {
 
     auto body = std::move(body_scratch_);
     buffer_.clear();
-    head_ = 0;
 
     submit_inference(ctx, std::move(body));
 }

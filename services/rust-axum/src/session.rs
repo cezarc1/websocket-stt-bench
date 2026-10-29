@@ -46,17 +46,22 @@ pub(crate) async fn ws_handler(
 }
 
 async fn handle_socket(mut socket: WebSocket, context: AppContext) {
-    match socket.recv().await {
-        Some(Ok(Message::Text(text))) if serde_json::from_str::<ClientMessage>(&text).is_ok() => {}
-        Some(Ok(_)) => {
-            send_close(&mut socket, CLOSE_PROTOCOL_ERROR, REASON_NEED_START).await;
-            return;
+    loop {
+        match socket.recv().await {
+            Some(Ok(message)) => match classify_first_message(&message) {
+                FirstMessage::Start => break,
+                FirstMessage::Control => {}
+                FirstMessage::Invalid => {
+                    send_close(&mut socket, CLOSE_PROTOCOL_ERROR, REASON_NEED_START).await;
+                    return;
+                }
+            },
+            Some(Err(error)) => {
+                warn!(%error, "failed to receive start message");
+                return;
+            }
+            None => return,
         }
-        Some(Err(error)) => {
-            warn!(%error, "failed to receive start message");
-            return;
-        }
-        None => return,
     }
     // `std::sync::Mutex` (not `tokio::sync::Mutex`) is correct here: the
     // lock is held only for `push` and `mem::replace` — never across an
@@ -97,6 +102,25 @@ async fn handle_socket(mut socket: WebSocket, context: AppContext) {
 
     flusher.abort();
     drop(out_tx);
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FirstMessage {
+    Start,
+    /// Ping/Pong: transport keepalive, not an application message — tungstenite
+    /// answers pings itself, so keep waiting for `start`.
+    Control,
+    Invalid,
+}
+
+fn classify_first_message(message: &Message) -> FirstMessage {
+    match message {
+        Message::Text(text) if serde_json::from_str::<ClientMessage>(text).is_ok() => {
+            FirstMessage::Start
+        }
+        Message::Ping(_) | Message::Pong(_) => FirstMessage::Control,
+        _ => FirstMessage::Invalid,
+    }
 }
 
 /// Process one inbound websocket message.
@@ -197,4 +221,41 @@ async fn send_close(socket: &mut WebSocket, code: u16, reason: &str) {
         })))
         .await;
     let _ = socket.close().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_message_start_is_accepted() {
+        let message = Message::Text(r#"{"type":"start"}"#.into());
+        assert_eq!(classify_first_message(&message), FirstMessage::Start);
+    }
+
+    #[test]
+    fn first_message_control_frames_are_skipped() {
+        for message in [
+            Message::Ping(bytes::Bytes::new()),
+            Message::Pong(bytes::Bytes::new()),
+        ] {
+            assert_eq!(classify_first_message(&message), FirstMessage::Control);
+        }
+    }
+
+    #[test]
+    fn first_message_invalid_cases_close_1002() {
+        for message in [
+            Message::Text("not json".into()),
+            Message::Text(r#"{"type":"stop"}"#.into()),
+            Message::Binary(bytes::Bytes::from_static(&[0_u8; FRAME_BYTES])),
+            Message::Close(None),
+        ] {
+            assert_eq!(
+                classify_first_message(&message),
+                FirstMessage::Invalid,
+                "{message:?}"
+            );
+        }
+    }
 }

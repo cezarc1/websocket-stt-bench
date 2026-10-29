@@ -22,5 +22,8 @@ inferbench:
 inference:
   # The 2080 node has 8 allocatable CPUs: one 6-CPU replica fits, four don't.
   replicas: 1
+  # A rolling update would need room for a second 6-CPU pod on an 8-CPU node.
+  strategy:
+    type: Recreate
   nodeSelector:
     kubernetes.io/hostname: "2080"

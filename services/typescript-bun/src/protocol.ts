@@ -6,9 +6,11 @@ export { FRAME_BYTES };
 
 export const CLOSE_PROTOCOL_ERROR = 1002;
 export const CLOSE_UNSUPPORTED_DATA = 1003;
+export const CLOSE_INTERNAL_ERROR = 1011;
 export const REASON_NEED_START = "first message must be start";
 export const REASON_TEXT_AFTER_START = "expected binary PCM frames after start";
 export const REASON_BAD_FRAME_SIZE = "expected 640 byte PCM frame";
+export const REASON_SEND_DROPPED = "outbound message dropped";
 
 export type ErrorStage =
   | "websocket_receive"
