@@ -96,30 +96,74 @@ pub struct GoldenStub {
     pub audio_bytes: u64,
 }
 
-// `transcript` is derived deterministically from `checksum` by the inference
-// server: TRANSCRIPT_POOL[checksum % 24]. For checksum 1_745_339_397 that lands
-// at index 21 → "now". If the inference server's pool is reordered, this
+// Stub output for `frame_payload(0, 1)` at 4 passes. Cross-checked against the
+// Python reference impl (`services/python-fastapi/tests/test_stub_parity.py::
+// test_loadgen_frame_payload_goldens`). `transcript` is derived from
+// `checksum` by the shared stub: TRANSCRIPT_POOL[checksum % 24]; for checksum
+// 763_539_697 that is index 1 → "quick". If the pool is reordered, this
 // constant must be updated together.
 pub const GOLDEN_ONE_FRAME: GoldenStub = GoldenStub {
     frames: 1,
     samples: 1280,
-    checksum: 1_745_339_397,
+    checksum: 763_539_697,
     zero_crossings: 7,
-    rms: 2425.5023191083533,
-    transcript: "now",
+    rms: 8_323.765_219_801_373,
+    transcript: "quick",
     audio_bytes: FRAME_BYTES as u64,
 };
 
+/// splitmix64 finalizer (Steele et al.): a cheap 64-bit bijection with full
+/// avalanche, so every output bit depends non-linearly on every input bit.
+const fn mix64(mut z: u64) -> u64 {
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+const SPLITMIX_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
+/// Sawtooth carrier: 17 units/sample over a 20 000-unit period (~1176
+/// samples), centred on zero — the same slope and range as the original
+/// generator, so `compute_stub`'s zero-crossing branch stays predictable and
+/// the inference server's per-batch CPU cost is unchanged.
+const SAW_PERIOD: i32 = 20_000;
+const SAW_STEP: i32 = 17;
+/// Noise is uniform in `-NOISE_HALF..NOISE_HALF`.
+const NOISE_HALF: i32 = 256;
+
+/// Deterministic PCM for frame `seq` of `session_id`.
+///
+/// `seed = mix64(mix64(session_id) ^ seq)` picks the sawtooth's starting
+/// phase and seeds a splitmix64 stream; each 64-bit output supplies 9-bit
+/// noise for 4 consecutive samples. Samples stay within ±10 256 and cross
+/// zero where the carrier does (with a little noise jitter there).
+///
+/// Content is a non-linear function of (session, seq), so distinct pairs do
+/// not share content: a stale result from N frames back, frame q replaced by
+/// q-k, or session s answered with session s+k all change the checksum. (The
+/// previous generator was linear in seq: it repeated every 125 frames and
+/// frame (s+160, q) equalled (s, q+63).)
+///
+/// Python port for cross-checking goldens:
+/// `services/python-fastapi/tests/golden.py::loadgen_frame_payload`.
 pub fn frame_payload(session_id: usize, seq: u64) -> Vec<u8> {
-    let mut out = Vec::with_capacity(FRAME_BYTES);
-    let base = seq
-        .wrapping_mul(SAMPLES_PER_FRAME as u64)
-        .wrapping_add(session_id as u64);
-    for offset in 0..SAMPLES_PER_FRAME {
-        let value = ((base + offset as u64).wrapping_mul(17) % 20_000) as i32 - 10_000;
-        out.extend_from_slice(&(value as i16).to_le_bytes());
+    const _: () = assert!(FRAME_BYTES == SAMPLES_PER_FRAME * 2 && FRAME_BYTES.is_multiple_of(8));
+    let mut out = [0_u8; FRAME_BYTES];
+    let mut state = mix64(mix64(session_id as u64) ^ seq);
+    let mut carrier = (state % SAW_PERIOD as u64) as i32;
+    for chunk in out.chunks_exact_mut(8) {
+        state = state.wrapping_add(SPLITMIX_GAMMA);
+        let noise = mix64(state);
+        for (lane, sample) in chunk.chunks_exact_mut(2).enumerate() {
+            let jitter = ((noise >> (16 * lane)) & 0x1FF) as i32 - NOISE_HALF;
+            let value = carrier - SAW_PERIOD / 2 + jitter;
+            sample.copy_from_slice(&(value as i16).to_le_bytes());
+            carrier += SAW_STEP;
+            if carrier >= SAW_PERIOD {
+                carrier -= SAW_PERIOD;
+            }
+        }
     }
-    out
+    out.to_vec()
 }
 
 #[cfg(test)]
@@ -131,6 +175,42 @@ mod tests {
         let payload = frame_payload(7, 11);
         assert_eq!(payload.len(), FRAME_BYTES);
         assert_ne!(payload, frame_payload(7, 12));
+    }
+
+    /// The old linear generator repeated every 125 frames and made frame
+    /// (s+160, q) identical to (s, q+63). Every (session, seq) pair in a
+    /// realistic window must now be unique.
+    #[test]
+    fn payloads_do_not_alias_across_seq_or_session() {
+        let mut seen = std::collections::HashSet::new();
+        for session in [0_usize, 1, 2, 160, 161, 320, 7_919] {
+            for seq in 1..=1_000_u64 {
+                assert!(
+                    seen.insert(frame_payload(session, seq)),
+                    "frame_payload({session}, {seq}) repeats an earlier frame"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn payload_stays_in_range_and_crosses_zero() {
+        let samples: Vec<i16> = (1..=50)
+            .flat_map(|seq| frame_payload(3, seq))
+            .collect::<Vec<u8>>()
+            .chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        assert!(samples.iter().all(|s| s.unsigned_abs() <= 10_256));
+        assert!(samples.iter().any(|&s| s > 9_000));
+        assert!(samples.iter().any(|&s| s < -9_000));
+        let crossings = samples
+            .windows(2)
+            .filter(|w| (w[0] < 0) != (w[1] < 0))
+            .count();
+        // Low-frequency carrier: crossings are sparse (branch-predictable in
+        // `compute_stub`) but present in every flush-sized batch.
+        assert!((10..=2_000).contains(&crossings), "crossings {crossings}");
     }
 
     #[test]

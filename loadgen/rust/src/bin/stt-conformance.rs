@@ -5,9 +5,12 @@ use anyhow::{Context, ensure};
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
-use stt_loadgen::protocol::{
-    FLUSH_INTERVAL, FRAME_INTERVAL, GOLDEN_ONE_FRAME, PartialMessage, ServerMessage, StartMessage,
-    frame_payload,
+use stt_loadgen::{
+    protocol::{
+        FLUSH_INTERVAL, FRAME_BYTES, FRAME_INTERVAL, GOLDEN_ONE_FRAME, PartialMessage,
+        ServerMessage, StartMessage, frame_payload,
+    },
+    verify::{Continuity, ExpectedConfig, rms_matches, verify_partial},
 };
 use tokio::net::TcpStream;
 use tokio::time::{Instant, sleep, sleep_until, timeout};
@@ -20,12 +23,28 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_TIMEOUT: Duration = Duration::from_secs(3);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
-const GOLDEN_RMS_TOLERANCE: f64 = 1e-6;
+
+/// Non-zero, pairwise-distinct session ids. `frame_payload` mixes the id into
+/// every sample, so a gateway that serves one connection's audio (or result)
+/// on another produces checksums that fail `verify_partial`. The frame seed is
+/// a non-linear hash of (session, seq), so distinct pairs never share content
+/// and any distinct ids work; these are arbitrary.
+const MULTI_FRAME_SESSION: usize = 7_919;
+const CADENCE_SESSION: usize = 101;
+const ISOLATION_SESSIONS: [usize; 2] = [211, 422];
+/// One full flush interval of audio.
+const MULTI_FRAME_COUNT: u64 = (FLUSH_INTERVAL.as_millis() / FRAME_INTERVAL.as_millis()) as u64;
 
 #[derive(Debug, Parser)]
 struct Args {
     #[arg(long = "service", value_parser = parse_service)]
     services: Vec<ServiceTarget>,
+    /// `cpu_passes` every partial must echo (gateway `CPU_PASSES`).
+    #[arg(long, default_value_t = ExpectedConfig::default().cpu_passes)]
+    expect_cpu_passes: u32,
+    /// `model_delay_ms` every partial must echo (gateway `MODEL_DELAY_MS`).
+    #[arg(long, default_value_t = ExpectedConfig::default().model_delay_ms)]
+    expect_model_delay_ms: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -42,10 +61,14 @@ async fn main() -> anyhow::Result<()> {
         "at least one --service name=url is required"
     );
 
+    let expected = ExpectedConfig {
+        cpu_passes: args.expect_cpu_passes,
+        model_delay_ms: args.expect_model_delay_ms,
+    };
     let mut failures = Vec::new();
     for target in args.services {
         print!("{} ... ", target.name);
-        match run_service(&target).await {
+        match run_service(&target, expected).await {
             Ok(()) => println!("ok"),
             Err(error) => {
                 println!("FAILED");
@@ -64,20 +87,83 @@ async fn main() -> anyhow::Result<()> {
     anyhow::bail!("conformance failed");
 }
 
-async fn run_service(target: &ServiceTarget) -> anyhow::Result<()> {
+async fn run_service(target: &ServiceTarget, expected: ExpectedConfig) -> anyhow::Result<()> {
     wait_until_ready(target).await?;
-    partial_schema_and_golden(target)
+    partial_schema_and_golden(target, expected)
         .await
         .context("partial schema and golden stub")?;
+    multi_frame_golden(target, expected)
+        .await
+        .context("multi-frame golden")?;
     invalid_start_closes(target)
         .await
         .context("invalid start close code")?;
     invalid_frame_closes(target)
         .await
         .context("invalid frame close code")?;
-    flush_cadence(target).await.context("flush cadence")?;
+    flush_cadence(target, expected)
+        .await
+        .context("flush cadence")?;
+    concurrent_isolation(target, expected)
+        .await
+        .context("concurrent session isolation")?;
     normal_close(target).await.context("normal close")?;
     Ok(())
+}
+
+/// Per-connection response checker: every partial must tile the frame
+/// sequence (`oldest == prev_newest + 1`), only cover frames actually sent,
+/// and carry exactly the stub output for those frames of `session_id`.
+struct PartialChecker {
+    session_id: usize,
+    expected: ExpectedConfig,
+    continuity: Continuity,
+    scratch: Vec<u8>,
+}
+
+impl PartialChecker {
+    fn new(session_id: usize, expected: ExpectedConfig) -> Self {
+        Self {
+            session_id,
+            expected,
+            continuity: Continuity::default(),
+            scratch: Vec::new(),
+        }
+    }
+
+    fn check(&mut self, partial: &PartialMessage, frames_sent: u64) -> anyhow::Result<()> {
+        let range = format!(
+            "session {} partial {}..={}",
+            self.session_id, partial.oldest_frame_seq, partial.newest_frame_seq
+        );
+        // Observe before validating so a partial failing another check still
+        // consumes its range and the next one is not also flagged as a gap.
+        let continuity = self
+            .continuity
+            .observe(partial.oldest_frame_seq, partial.newest_frame_seq);
+        partial.validate().with_context(|| range.clone())?;
+        if let Some(mismatch) = continuity {
+            anyhow::bail!("{range}: {mismatch}");
+        }
+        ensure!(
+            partial.newest_frame_seq <= frames_sent,
+            "{range}: covers frames not yet sent (sent {frames_sent})"
+        );
+        let mismatches = verify_partial(self.session_id, partial, self.expected, &mut self.scratch);
+        if !mismatches.is_empty() {
+            let details = mismatches
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ");
+            anyhow::bail!("{range}: {details}");
+        }
+        Ok(())
+    }
+
+    fn covered(&self) -> u64 {
+        self.continuity.last_newest()
+    }
 }
 
 async fn wait_until_ready(target: &ServiceTarget) -> anyhow::Result<()> {
@@ -104,7 +190,10 @@ async fn wait_until_ready(target: &ServiceTarget) -> anyhow::Result<()> {
     }
 }
 
-async fn partial_schema_and_golden(target: &ServiceTarget) -> anyhow::Result<()> {
+async fn partial_schema_and_golden(
+    target: &ServiceTarget,
+    expected: ExpectedConfig,
+) -> anyhow::Result<()> {
     let mut socket = connect(target).await?;
     send_start(&mut socket).await?;
     socket
@@ -133,7 +222,7 @@ async fn partial_schema_and_golden(target: &ServiceTarget) -> anyhow::Result<()>
         "zero crossings mismatch"
     );
     ensure!(
-        (partial.rms - GOLDEN_ONE_FRAME.rms).abs() <= GOLDEN_RMS_TOLERANCE,
+        rms_matches(partial.rms, GOLDEN_ONE_FRAME.rms),
         "rms mismatch: got {}, expected {}",
         partial.rms,
         GOLDEN_ONE_FRAME.rms
@@ -150,77 +239,181 @@ async fn partial_schema_and_golden(target: &ServiceTarget) -> anyhow::Result<()>
         partial.audio_bytes,
         GOLDEN_ONE_FRAME.audio_bytes
     );
+    // Also exercises cpu_passes / model_delay_ms echo and the shared helper.
+    PartialChecker::new(0, expected).check(&partial, 1)?;
 
     let _ = socket.send(Message::Close(None)).await;
     Ok(())
 }
 
-async fn invalid_start_closes(target: &ServiceTarget) -> anyhow::Result<()> {
-    let mut socket = connect(target).await?;
-    socket
-        .send(Message::Text("not-json".into()))
-        .await
-        .context("send invalid start")?;
-    expect_close_code(&mut socket, 1002, CLOSE_TIMEOUT).await
-}
-
-async fn invalid_frame_closes(target: &ServiceTarget) -> anyhow::Result<()> {
+/// Burst one flush interval of frames from a non-zero session and verify the
+/// partial(s) covering them against the shared stub. A 1-frame golden cannot
+/// catch per-batch bugs (dropped/reordered/duplicated frames inside a batch,
+/// wrong concatenation, partial batches); this can.
+async fn multi_frame_golden(
+    target: &ServiceTarget,
+    expected: ExpectedConfig,
+) -> anyhow::Result<()> {
     let mut socket = connect(target).await?;
     send_start(&mut socket).await?;
-    socket
-        .send(Message::Binary(vec![0_u8; 10].into()))
-        .await
-        .context("send invalid binary frame")?;
-    expect_close_code(&mut socket, 1003, CLOSE_TIMEOUT).await
+    for seq in 1..=MULTI_FRAME_COUNT {
+        socket
+            .send(Message::Binary(
+                frame_payload(MULTI_FRAME_SESSION, seq).into(),
+            ))
+            .await
+            .context("send multi-frame batch")?;
+    }
+
+    let mut checker = PartialChecker::new(MULTI_FRAME_SESSION, expected);
+    let mut partials = 0_u32;
+    while checker.covered() < MULTI_FRAME_COUNT {
+        // Allow a full extra flush interval: the first flush tick may carry
+        // up to FLUSH_PHASE_JITTER of initial phase offset.
+        let (_raw, partial) = read_partial(&mut socket, READ_TIMEOUT + FLUSH_INTERVAL)
+            .await
+            .with_context(|| {
+                format!(
+                    "waiting for frames {}..={MULTI_FRAME_COUNT}",
+                    checker.covered() + 1
+                )
+            })?;
+        checker.check(&partial, MULTI_FRAME_COUNT)?;
+        partials += 1;
+    }
+    // A burst normally lands in a single flush; a flush tick mid-burst may
+    // legitimately split it, but more than two partials means the gateway is
+    // not batching per flush interval.
+    ensure!(
+        partials <= 2,
+        "{MULTI_FRAME_COUNT} burst frames arrived in {partials} partials"
+    );
+
+    let _ = socket.send(Message::Close(None)).await;
+    Ok(())
 }
 
-async fn flush_cadence(target: &ServiceTarget) -> anyhow::Result<()> {
+/// "Invalid first messages close with WebSocket code 1002." Only cases the
+/// contract settles are tested: not JSON, JSON that is not a start message,
+/// and a binary frame where the start message must be. (A start carrying
+/// extra fields is deliberately not tested — the contract doesn't say.)
+async fn invalid_start_closes(target: &ServiceTarget) -> anyhow::Result<()> {
+    let cases: [(&str, Message); 3] = [
+        ("non-JSON text", Message::Text("not-json".into())),
+        (
+            r#"wrong type {"type":"stop"}"#,
+            Message::Text(r#"{"type":"stop"}"#.into()),
+        ),
+        (
+            "binary frame before start",
+            Message::Binary(frame_payload(0, 1).into()),
+        ),
+    ];
+    for (label, first) in cases {
+        let mut socket = connect(target).await?;
+        socket
+            .send(first)
+            .await
+            .with_context(|| format!("send invalid start ({label})"))?;
+        expect_close_code(&mut socket, 1002, CLOSE_TIMEOUT)
+            .await
+            .with_context(|| format!("invalid start: {label}"))?;
+    }
+    Ok(())
+}
+
+/// "Invalid binary frame sizes close with code 1003."
+async fn invalid_frame_closes(target: &ServiceTarget) -> anyhow::Result<()> {
+    for size in [0, 10, FRAME_BYTES - 1, FRAME_BYTES + 1] {
+        let mut socket = connect(target).await?;
+        send_start(&mut socket).await?;
+        socket
+            .send(Message::Binary(vec![0_u8; size].into()))
+            .await
+            .with_context(|| format!("send {size}-byte binary frame"))?;
+        expect_close_code(&mut socket, 1003, CLOSE_TIMEOUT)
+            .await
+            .with_context(|| format!("invalid frame size {size}"))?;
+    }
+    Ok(())
+}
+
+/// Stream real-time paced frames for `session_id` until at least
+/// `min_partials` partials arrived and `send_for` elapsed. Every partial is
+/// checked for continuity and exact values; returns their arrival times.
+async fn stream_paced(
+    target: &ServiceTarget,
+    session_id: usize,
+    expected: ExpectedConfig,
+    min_partials: usize,
+    send_for: Duration,
+    give_up_after: Duration,
+) -> anyhow::Result<Vec<Instant>> {
     let mut socket = connect(target).await?;
     send_start(&mut socket).await?;
     let (mut write, mut read) = socket.split();
     let started = Instant::now();
-    let stop_sending = started + Duration::from_millis(3_250);
-    let deadline = started + Duration::from_secs(7);
+    let stop_sending = started + send_for;
+    let deadline = started + give_up_after;
     let mut next_frame = started;
-    let mut seq = 1_u64;
+    let mut sent = 0_u64;
+    let mut checker = PartialChecker::new(session_id, expected);
     let mut partial_times = Vec::new();
 
     loop {
-        if partial_times.len() >= 3 && Instant::now() >= stop_sending {
+        if partial_times.len() >= min_partials && Instant::now() >= stop_sending {
             break;
         }
 
         tokio::select! {
             () = sleep_until(next_frame), if Instant::now() < stop_sending => {
                 write
-                    .send(Message::Binary(frame_payload(0, seq).into()))
+                    .send(Message::Binary(frame_payload(session_id, sent + 1).into()))
                     .await
-                    .context("send cadence frame")?;
-                seq += 1;
+                    .context("send paced frame")?;
+                sent += 1;
                 next_frame += FRAME_INTERVAL;
             }
             message = read.next() => {
                 let Some(message) = message else {
-                    anyhow::bail!("socket closed before cadence partials");
+                    anyhow::bail!("socket closed before {min_partials} partials");
                 };
-                match message.context("read cadence message")? {
+                match message.context("read paced message")? {
                     Message::Text(text) => {
                         let partial = expect_partial(&text)
-                            .context("decode cadence message")?;
-                        partial.validate()?;
+                            .context("decode paced message")?;
+                        checker.check(&partial, sent)?;
                         partial_times.push(Instant::now());
                     }
                     Message::Close(frame) => {
-                        anyhow::bail!("server closed during cadence test: {frame:?}");
+                        anyhow::bail!("server closed while streaming: {frame:?}");
                     }
                     _ => {}
                 }
             }
             () = sleep_until(deadline) => {
-                anyhow::bail!("timed out waiting for cadence partials");
+                anyhow::bail!(
+                    "timed out with {} of {min_partials} partials",
+                    partial_times.len()
+                );
             }
         }
     }
+
+    let _ = write.send(Message::Close(None)).await;
+    Ok(partial_times)
+}
+
+async fn flush_cadence(target: &ServiceTarget, expected: ExpectedConfig) -> anyhow::Result<()> {
+    let partial_times = stream_paced(
+        target,
+        CADENCE_SESSION,
+        expected,
+        3,
+        Duration::from_millis(3_250),
+        Duration::from_secs(7),
+    )
+    .await?;
 
     ensure!(
         partial_times.len() >= 3,
@@ -243,8 +436,31 @@ async fn flush_cadence(target: &ServiceTarget) -> anyhow::Result<()> {
             <= FLUSH_INTERVAL + Duration::from_millis(250),
         "first cadence interval too wide"
     );
+    Ok(())
+}
 
-    let _ = write.send(Message::Close(None)).await;
+/// Two simultaneous connections with different session ids. Each one's
+/// partials must match its own audio exactly; any shared buffer, swapped
+/// response routing, or cross-connection seq counter fails `verify_partial`
+/// or continuity on at least one side.
+async fn concurrent_isolation(
+    target: &ServiceTarget,
+    expected: ExpectedConfig,
+) -> anyhow::Result<()> {
+    let [left, right] = ISOLATION_SESSIONS;
+    let stream = |session_id| {
+        stream_paced(
+            target,
+            session_id,
+            expected,
+            2,
+            Duration::from_millis(2_250),
+            Duration::from_secs(6),
+        )
+    };
+    let (left_result, right_result) = tokio::join!(stream(left), stream(right));
+    left_result.with_context(|| format!("session {left}"))?;
+    right_result.with_context(|| format!("session {right}"))?;
     Ok(())
 }
 

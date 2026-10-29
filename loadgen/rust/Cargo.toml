@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+stt-stub.workspace = true
 clap.workspace = true
 futures-util.workspace = true
 hdrhistogram.workspace = true

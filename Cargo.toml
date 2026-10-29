@@ -1,5 +1,5 @@
 [workspace]
-members = ["loadgen/rust", "services/inference-server", "services/rust-axum", "services/rust-sync"]
+members = ["crates/stt-stub", "loadgen/rust", "services/inference-server", "services/rust-axum", "services/rust-sync"]
 resolver = "3"
 
 [workspace.package]
@@ -25,6 +25,8 @@ tokio-tungstenite = "=0.29.0"
 tungstenite = "=0.29.0"
 tracing = "=0.1.44"
 socket2 = "=0.6.3"
+# Internal shared crate; exact version keeps cargo-deny `wildcards = "deny"` happy.
+stt-stub = { path = "crates/stt-stub", version = "=0.1.0" }
 mio = { version = "=1.2.0", features = ["net", "os-poll"] }
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "fmt"] }
 

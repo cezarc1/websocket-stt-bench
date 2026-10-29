@@ -29,6 +29,7 @@ use axum::{
 use rand::RngExt;
 use rand_distr::{Distribution, LogNormal};
 use serde::Serialize;
+use stt_stub::compute_stub;
 use tokio::{sync::Semaphore, task, time::sleep};
 use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
@@ -41,18 +42,6 @@ const DEFAULT_LONGTAIL_MULT: f64 = 3.0;
 const DEFAULT_BATCH_WAIT_MAX_MS: f64 = 20.0;
 const DEFAULT_MAX_CONCURRENT: usize = 64;
 const CPU_PASSES_HEADER: &str = "x-cpu-passes";
-
-const FNV_OFFSET: u32 = 2_166_136_261;
-const FNV_PRIME: u32 = 16_777_619;
-
-// Placeholder STT vocabulary. The transcript for any input is selected by
-// indexing this pool with the final FNV checksum, so identical PCM in always
-// yields the same word.
-const TRANSCRIPT_POOL: &[&str] = &[
-    "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "hello", "world", "yes", "no",
-    "okay", "right", "left", "stop", "go", "wait", "ready", "done", "again", "now", "later",
-    "never",
-];
 
 #[derive(Clone)]
 struct ServerState {
@@ -76,16 +65,6 @@ struct ServerState {
 
 #[derive(Serialize)]
 struct InferResponse {
-    rms: f64,
-    zero_crossings: u64,
-    checksum: u32,
-    samples: u64,
-    transcript: &'static str,
-    audio_bytes: u64,
-}
-
-#[derive(Debug)]
-struct StubResult {
     rms: f64,
     zero_crossings: u64,
     checksum: u32,
@@ -235,47 +214,6 @@ fn sample_latency(state: &ServerState) -> Duration {
     Duration::from_secs_f64(total_ms / 1000.0)
 }
 
-fn compute_stub(payload: &[u8], passes: u32) -> StubResult {
-    let mut checksum = FNV_OFFSET;
-    let mut zero_crossings = 0_u64;
-    let mut sum_squares = 0_i128;
-    let mut sample_count = 0_u64;
-    let mut previous = 0_i16;
-
-    for pass_index in 0..passes {
-        for chunk in payload.chunks_exact(2) {
-            let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-            if sample_count > 0 && ((sample < 0 && previous >= 0) || (previous < 0 && sample >= 0))
-            {
-                zero_crossings += 1;
-            }
-            let adjusted = (sample as i32 + 32_768 + pass_index as i32) as u32;
-            checksum ^= adjusted & 0xFFFF;
-            checksum = checksum.wrapping_mul(FNV_PRIME);
-            sum_squares += i128::from(sample) * i128::from(sample);
-            sample_count += 1;
-            previous = sample;
-        }
-    }
-
-    let rms = if sample_count == 0 {
-        0.0
-    } else {
-        ((sum_squares as f64) / (sample_count as f64)).sqrt()
-    };
-
-    let transcript = TRANSCRIPT_POOL[(checksum as usize) % TRANSCRIPT_POOL.len()];
-
-    StubResult {
-        rms,
-        zero_crossings,
-        checksum,
-        samples: sample_count,
-        transcript,
-        audio_bytes: payload.len() as u64,
-    }
-}
-
 fn resolve_worker_threads() -> usize {
     let configured = env_parsed::<usize>("WORKER_THREADS", 0);
     if configured > 0 {
@@ -291,26 +229,4 @@ fn env_parsed<T: std::str::FromStr>(name: &str, default: T) -> T {
         .ok()
         .and_then(|value| value.parse::<T>().ok())
         .unwrap_or(default)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stub_is_deterministic() {
-        let payload: Vec<u8> = [0_i16, 100, -100, 200]
-            .into_iter()
-            .flat_map(i16::to_le_bytes)
-            .collect();
-        let left = compute_stub(&payload, 4);
-        let right = compute_stub(&payload, 4);
-
-        assert_eq!(left.checksum, right.checksum);
-        assert_eq!(left.zero_crossings, right.zero_crossings);
-        assert_eq!(left.samples, 16);
-        assert_eq!(left.transcript, right.transcript);
-        assert_eq!(left.audio_bytes, payload.len() as u64);
-        assert!(TRANSCRIPT_POOL.contains(&left.transcript));
-    }
 }

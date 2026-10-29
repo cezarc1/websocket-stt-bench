@@ -1381,6 +1381,7 @@ dependencies = [
  "rand_distr",
  "serde",
  "serde_json",
+ "stt-stub",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1397,6 +1398,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "stt-stub",
  "tokio",
  "tokio-tungstenite",
  "tracing",
@@ -1430,6 +1432,10 @@ dependencies = [
  "socket2",
  "tungstenite",
 ]
+
+[[package]]
+name = "stt-stub"
+version = "0.1.0"
 
 [[package]]
 name = "subtle"

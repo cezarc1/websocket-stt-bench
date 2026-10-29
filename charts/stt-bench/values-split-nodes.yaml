@@ -1,0 +1,26 @@
+# Split placement for realistic-load harness runs on the homelab k3s cluster:
+# the gateway under test and the load generator on cezar-4090 (the gateway is
+# CPU-limited by its own requests/limits), the shared inference server alone
+# on the 2080 node. Layer on top of your homelab values:
+#   helm upgrade --install stt-bench charts/stt-bench -n stt-bench \
+#     -f <your-homelab-values>.yaml -f charts/stt-bench/values-split-nodes.yaml
+#
+# NOTE: gateway->inference traffic now crosses the LAN, so results are not
+# directly comparable with runs where both shared a node.
+
+gatewayNodeSelector:
+  kubernetes.io/hostname: cezar-4090
+
+loadgen:
+  nodeSelector:
+    kubernetes.io/hostname: cezar-4090
+
+inferbench:
+  nodeSelector:
+    kubernetes.io/hostname: cezar-4090
+
+inference:
+  # The 2080 node has 8 allocatable CPUs: one 6-CPU replica fits, four don't.
+  replicas: 1
+  nodeSelector:
+    kubernetes.io/hostname: "2080"

@@ -146,8 +146,10 @@ Kubernetes cluster + the methodology above; homelab specifics are Appendix A.
 
 1. `just compose-build` then `just conformance`. Add your service to the
    `conformance` recipe's compose list and `--service <name>=ws://<name>:<port>/ws/stt`.
-2. All five cases must pass: partial schema+golden, invalid-start→1002,
-   invalid-frame→1003, flush cadence, normal close.
+2. All seven cases must pass: partial schema+golden, multi-frame golden,
+   invalid-start→1002 (non-JSON, wrong `type`, binary first), invalid-frame→1003
+   (0/639/641/10 bytes), flush cadence with per-partial value + seq-continuity
+   checks, concurrent session isolation, normal close.
 3. **Do not proceed to measurement until conformance is green.** A fast/buggy
    gateway is not a result.
 
@@ -235,7 +237,7 @@ stt_analysis.comparison_chart_gen --out ../docs/loc-vs-capacity.png`.
 - [ ] `services/<runtime>/` gateway; `just <runtime>-check` green
 - [ ] Wired into `versions.lock.toml`, `doctor.sh`, `docker-compose.yml`,
       `docker/`, Helm `values.yaml`, `images.yml`, `just check` aggregate
-- [ ] `just conformance` green (all 5 cases)
+- [ ] `just conformance` green (all 7 cases)
 - [ ] `/simplify` round done; re-verified no regression
 - [ ] CI image job `success`; deployed; 50-session smoke `err=0`
 - [ ] 1-vCPU bracket `confirmed ↔ borderline ↔ first-solid-fail`

@@ -7,6 +7,7 @@
 #
 # Prints one line:
 #   <sessions> PASS|FAIL <reason> | partials=.. err=.. newest p50/p95 ...
+#     ... correctness_err=<n>/<m>verified[,<k>dropped]   (informational, not a gate)
 # Exits 0 always (the driver brackets on the printed verdict, not exit code).
 import sys, json
 
@@ -30,6 +31,17 @@ errs = (
     + to.get("session", 0)
 )
 erate = (errs / p) if p else 1.0
+# Correctness (continuity + expected stub values, see loadgen/rust/src/verify.rs)
+# is REPORTED ONLY, not gated: it is absent from `errs` and from the verdict.
+# Summaries from older loadgens lack the field and print "n/a".
+cerr = d.get("correctness_errors")
+cver = d.get("verified_partials")
+cdrop = d.get("verify_dropped")
+correctness = (
+    "n/a" if cerr is None else f"{cerr}/{cver if cver is not None else '?'}verified"
+)
+if cdrop:
+    correctness += f",{cdrop}dropped"
 gates = []
 if nf["p50_ms"] > 200:
     gates.append(f"newest_p50={nf['p50_ms']:.0f}>200")
@@ -49,5 +61,6 @@ print(
     f"partials={p} err={errs} "
     f"newest {nf['p50_ms']:.0f}/{nf['p95_ms']:.0f} "
     f"oldest {of['p50_ms']:.0f}/{of['p95_ms']:.0f} "
-    f"flush_p95={d['flush_lateness'].get('p95_ms', 0):.2f}"
+    f"flush_p95={d['flush_lateness'].get('p95_ms', 0):.2f} "
+    f"correctness_err={correctness}"
 )

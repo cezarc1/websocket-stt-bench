@@ -22,6 +22,10 @@ spec:
         gateway: {{ $key }}
     spec:
       {{- include "stt-bench.imagePullSecrets" $ | nindent 6 }}
+      {{- with ($gateway.nodeSelector | default $.Values.gatewayNodeSelector) }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         {{- toYaml $.Values.podSecurityContext | nindent 8 }}
       containers:

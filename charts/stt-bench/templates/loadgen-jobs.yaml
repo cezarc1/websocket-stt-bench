@@ -25,6 +25,10 @@ spec:
         gateway: {{ .gateway }}
     spec:
       {{- include "stt-bench.imagePullSecrets" $ | nindent 6 }}
+      {{- with $.Values.loadgen.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         {{- toYaml $.Values.podSecurityContextWithFsGroup | nindent 8 }}
       restartPolicy: Never
