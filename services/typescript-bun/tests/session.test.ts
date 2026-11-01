@@ -2,6 +2,11 @@ import { describe, expect, test } from "bun:test";
 
 import { InferenceError, type InferenceRunner } from "../src/inference.ts";
 import { BoundedOutbox, SttSession, type SocketLike } from "../src/session.ts";
+import {
+  DEFAULT_FLUSH_INTERVAL_MS,
+  DEFAULT_INFERENCE_TIMEOUT_MS,
+  maxBufferedFrames,
+} from "../src/config.ts";
 import { FRAME_BYTES } from "../src/protocol.ts";
 
 class FakeSocket implements SocketLike {
@@ -148,6 +153,104 @@ describe("SttSession", () => {
 
     expect(socket.sent).toHaveLength(1);
     expect(session.bufferedFramesForTest()).toBe(1);
+  });
+
+  test("closes with 1013 once a stalled session's backlog hits the cap", async () => {
+    const socket = new FakeSocket();
+    const gate = deferred<Awaited<ReturnType<InferenceRunner>>>();
+    const session = new SttSession(socket, {
+      inference: () => gate.promise,
+      timers: false,
+    });
+
+    session.handleMessage('{"type":"start"}');
+    session.handleMessage(frame(0));
+    // The single in-flight request never completes, so every later flush is
+    // skipped and frames pile up.
+    const stalled = session.flushOnceForTest(0);
+    const cap = session.maxBufferedFramesForTest();
+    for (let i = 0; i < cap; i += 1) {
+      session.handleMessage(frame(1));
+    }
+    await session.flushOnceForTest(0);
+    expect(session.bufferedFramesForTest()).toBe(cap);
+    expect(socket.closes).toHaveLength(0);
+
+    session.handleMessage(frame(2));
+    expect(socket.closes).toEqual([
+      { code: 1013, reason: "gateway overloaded: frame backlog limit exceeded" },
+    ]);
+    // Closed sessions ignore further input instead of growing again.
+    session.handleMessage(frame(3));
+    expect(socket.closes).toHaveLength(1);
+
+    gate.resolve(prediction(FRAME_BYTES));
+    await stalled;
+    expect(socket.sent).toHaveLength(0);
+  });
+
+  test("the backlog cap is twice the longest wait a healthy flush can see", () => {
+    const base = {
+      cpuPasses: 4,
+      modelDelayMs: 75,
+      flushIntervalMs: 1000,
+      flushPhaseJitterMs: 0,
+      inferenceTimeoutMs: 2000,
+    };
+    // (2 s timeout + 1 s until the next tick) = 150 frames, doubled.
+    expect(maxBufferedFrames(base)).toBe(300);
+    // The phase jitter only delays the first flush, when nothing is in flight.
+    expect(maxBufferedFrames({ ...base, flushPhaseJitterMs: 1000 })).toBe(300);
+    expect(maxBufferedFrames({ ...base, flushPhaseJitterMs: 5000 })).toBe(600);
+    expect(maxBufferedFrames({ ...base, inferenceTimeoutMs: 5000 })).toBe(600);
+  });
+
+  test("a session whose every request runs to the inference timeout never hits the cap", async () => {
+    const socket = new FakeSocket();
+    let gate = deferred<Awaited<ReturnType<InferenceRunner>>>();
+    const session = new SttSession(socket, { inference: () => gate.promise, timers: false });
+    // Frames that arrive while one request runs for the whole timeout, plus
+    // one interval until the next tick picks them up.
+    const framesPerCycle = (DEFAULT_INFERENCE_TIMEOUT_MS + DEFAULT_FLUSH_INTERVAL_MS) / 20;
+
+    session.handleMessage('{"type":"start"}');
+    session.handleMessage(frame(0));
+    for (let cycle = 0; cycle < 10; cycle += 1) {
+      const pending = session.flushOnceForTest(0);
+      for (let i = 0; i < framesPerCycle; i += 1) {
+        session.handleMessage(frame(cycle));
+      }
+      gate.resolve(prediction(FRAME_BYTES));
+      // Sequential by design: one in-flight request per session.
+      // biome-ignore lint/performance/noAwaitInLoops: one request at a time
+      await pending; // oxlint-disable-line no-await-in-loop
+      gate = deferred();
+    }
+
+    expect(socket.closes).toHaveLength(0);
+    expect(session.bufferedFramesForTest()).toBe(framesPerCycle);
+  });
+
+  test("a session that flushes every interval never approaches the backlog cap", async () => {
+    const socket = new FakeSocket();
+    const session = new SttSession(socket, {
+      inference: (body) => Promise.resolve(prediction(body.byteLength)),
+      timers: false,
+    });
+
+    session.handleMessage('{"type":"start"}');
+    // 60 s of audio, flushed once per 50 frames (one 1000 ms interval).
+    for (let second = 0; second < 60; second += 1) {
+      for (let i = 0; i < 50; i += 1) {
+        session.handleMessage(frame(second));
+      }
+      // Sequential by design: each flush must finish before the next interval.
+      // biome-ignore lint/performance/noAwaitInLoops: one flush per interval
+      await session.flushOnceForTest(0); // oxlint-disable-line no-await-in-loop
+    }
+
+    expect(socket.closes).toHaveLength(0);
+    expect(socket.sent).toHaveLength(60);
   });
 
   test("relays inference timeouts as error messages on the wire", async () => {

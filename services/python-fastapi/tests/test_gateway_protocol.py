@@ -252,3 +252,90 @@ def test_one_inflight_inference_per_connection(monkeypatch: pytest.MonkeyPatch) 
 
     asyncio.run(scenario())
     assert peak == 1
+
+
+class GranianLikeClient(FakeClient):
+    """Records whether a transport op was cancelled mid-flight. Granian's
+    watcher.done() blocking-locks the transport (GIL held) once the handler
+    returns, so a cancelled-but-unreleased receive/send froze the worker."""
+
+    def __init__(self, *messages: Message) -> None:
+        super().__init__(*messages)
+        self.cancelled_ops: list[str] = []
+        self.send_started = asyncio.Event()
+        self.release_send = asyncio.Event()
+        self.fail_send = False
+        self.send_failed = asyncio.Event()
+
+    async def _receive(self) -> Message:
+        try:
+            return await super()._receive()
+        except asyncio.CancelledError:
+            self.cancelled_ops.append("receive")
+            raise
+
+    async def _send(self, message: Message) -> None:
+        if message["type"] != "websocket.send":
+            return await super()._send(message)
+        if self.fail_send:
+            self.send_failed.set()
+            raise OSError("peer gone")
+        self.send_started.set()
+        try:
+            await self.release_send.wait()
+        except asyncio.CancelledError:
+            self.cancelled_ops.append("send")
+            raise
+        return await super()._send(message)
+
+
+def instant_inference(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_run_inference(_client: object, _passes: int, body: bytes) -> Prediction:
+        return fake_prediction(body)
+
+    monkeypatch.setattr(session_mod, "run_inference", fake_run_inference)
+
+
+def test_disconnect_waits_for_inflight_send_instead_of_cancelling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instant_inference(monkeypatch)
+
+    async def scenario() -> GranianLikeClient:
+        ws = GranianLikeClient(START, binary(frame(1)))
+        session = await started_session(ws, flush_interval_ms=5)
+        task = asyncio.create_task(session.run())
+        await asyncio.wait_for(ws.send_started.wait(), 1)
+        ws.inbox.put_nowait(DISCONNECT)
+        await asyncio.sleep(0.05)
+        assert not task.done(), "handler returned while a send was still in flight"
+        ws.release_send.set()
+        await asyncio.wait_for(task, 1)
+        return ws
+
+    ws = asyncio.run(scenario())
+    assert ws.cancelled_ops == []
+    assert [m["newest_frame_seq"] for m in ws.sent] == [1]
+
+
+def test_send_failure_ends_session_without_cancelling_receive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instant_inference(monkeypatch)
+
+    async def scenario() -> GranianLikeClient:
+        ws = GranianLikeClient(START, binary(frame(1)))
+        ws.fail_send = True
+        session = await started_session(ws, flush_interval_ms=5)
+        task = asyncio.create_task(session.run())
+        # Writer hits the dead peer while receive() is parked on an empty inbox.
+        await asyncio.wait_for(ws.send_failed.wait(), 1)
+        await asyncio.sleep(0.05)
+        assert not task.done(), "pending receive() was cancelled by the writer failure"
+        # The next completed receive ends the session; nothing raises out.
+        ws.inbox.put_nowait(binary(frame(2)))
+        await asyncio.wait_for(task, 1)
+        return ws
+
+    ws = asyncio.run(scenario())
+    assert ws.cancelled_ops == []

@@ -409,4 +409,39 @@ final class SessionTest {
         assertEquals(Protocol.PARTIAL_TYPE, next.get("type").asText());
         assertEquals(3L, next.get("oldest_frame_seq").asLong(), "next flush continues the seq range");
     }
+
+    /// Under overload (inference never drains the buffer) the session is closed with 1013 at the
+    /// cap rather than buffering without bound, and no frame past the cap is silently accepted.
+    @Test
+    void backlogOverCapClosesWithTryAgainLater() {
+        FakeWsSession ws = new FakeWsSession();
+        Session session = started(ws);
+        for (int i = 0; i < Session.MAX_BACKLOG_FRAMES; i++) {
+            session.onMessage(ws, bytes(Protocol.FRAME_BYTES, (byte) 1), true);
+        }
+        assertEquals(0, ws.closeCode, "a backlog at the cap must not close");
+        assertEquals(Session.MAX_BACKLOG_FRAMES, session.bufferedFrames());
+
+        session.onMessage(ws, bytes(Protocol.FRAME_BYTES, (byte) 1), true);
+        assertEquals(Protocol.CLOSE_TRY_AGAIN_LATER, ws.closeCode);
+        assertEquals(Session.MAX_BACKLOG_FRAMES, session.bufferedFrames(), "overflow frame is not buffered");
+        assertEquals(Session.MAX_BACKLOG_FRAMES, session.seq, "seq stays contiguous with what was buffered");
+    }
+
+    /// A backlog the SLO allows (well past one flush interval) never trips the cap, and draining
+    /// resets it.
+    @Test
+    void passingLoadBacklogNeverTripsTheCap() throws Exception {
+        FakeWsSession ws = new FakeWsSession();
+        Session session = started(ws);
+        for (int round = 0; round < 3; round++) {
+            for (int i = 0; i < 150; i++) { // 3 s of audio: ~2x the oldest-frame p95 gate
+                session.onMessage(ws, bytes(Protocol.FRAME_BYTES, (byte) 1), true);
+            }
+            session.tryFlush(0.0);
+            assertNotNull(session.outbox.poll(1, TimeUnit.SECONDS));
+        }
+        assertEquals(0, ws.closeCode);
+        session.onClose(ws, 1000, "normal");
+    }
 }

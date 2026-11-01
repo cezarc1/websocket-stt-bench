@@ -154,7 +154,7 @@ x-java-env: &java-env
   # Benchmark JVM flags; no pin diagnostics. `-Djdk.tracePinnedThreads` was
   # removed in JDK 24; to investigate pinning in dev, add JFR's
   # jdk.VirtualThreadPinned event (recipe in docker/java-helidon-nima.Dockerfile).
-  JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
+  JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch -XX:MaxDirectMemorySize=128m -XX:+ExitOnOutOfMemoryError"
 
 x-scala-env: &scala-env
   CPU_PASSES: "4"

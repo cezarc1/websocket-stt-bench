@@ -39,7 +39,11 @@ COPY --from=build /usr/local/lib/stt-java-helidon-nima.jar /usr/local/lib/stt-ja
 # `-Xms == -Xmx` keeps ZGC from growing committed memory during ramp; `+AlwaysPreTouch`
 # pre-faults all heap pages at startup, eliminating first-touch page-fault spikes at the
 # 2600-session edge. Costs ~1s of warmup time; pays back in p99 stability.
-ENV JAVA_OPTS="-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch" \
+# Memory budget for the 2 GiB pod: 1.5 GiB heap + ~90 MiB measured non-heap (NMT at 1000
+# sessions; direct buffers ~0) + an explicit 128 MiB direct-memory cap (the default would be
+# -Xmx, i.e. past the cgroup limit). `+ExitOnOutOfMemoryError` makes heap exhaustion exit 3:
+# otherwise Helidon's listener catches the OOME, stops, and the JVM exits 0 ("Completed").
+ENV JAVA_OPTS="-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch -XX:MaxDirectMemorySize=128m -XX:+ExitOnOutOfMemoryError" \
     PORT=5000
 
 EXPOSE 5000

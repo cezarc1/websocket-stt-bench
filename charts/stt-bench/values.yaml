@@ -213,7 +213,7 @@ gateways:
       # JEP 491 (JDK 24) removes synchronized-induced pinning. For dev pin
       # investigation use JFR's jdk.VirtualThreadPinned event (recipe in
       # docker/java-helidon-nima.Dockerfile); -Djdk.tracePinnedThreads is gone.
-      JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
+      JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch -XX:MaxDirectMemorySize=128m -XX:+ExitOnOutOfMemoryError"
     resources:
       requests:
         cpu: "1"
@@ -230,7 +230,7 @@ gateways:
     env:
       WORKER_THREADS: "2"
       INFERENCE_HTTP_CLIENTS: "4"
-      JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
+      JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch -XX:MaxDirectMemorySize=128m -XX:+ExitOnOutOfMemoryError"
     resources:
       requests:
         cpu: "2"
