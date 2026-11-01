@@ -56,10 +56,10 @@ x-ocaml-build: &ocaml-build
   # Self-contained: builds the OxCaml switch + deps from source (~20-30
   # min cold). Local iteration uses the opam switch directly, not this.
   args:
-    OPAM_BASE_IMAGE: "ocaml/opam:debian-12-ocaml-5.2"
-    DEBIAN_RUNTIME_IMAGE: "debian:12-slim"
+    OPAM_BASE_IMAGE: "ocaml/opam:debian-12-ocaml-5.2@sha256:3a849fd15d393ad25192f508a8a0d5af21d77ff380c15e217c81a14cc1361e78"
+    DEBIAN_RUNTIME_IMAGE: "debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
     OXCAML_SWITCH: "5.2.0+ox"
-    OXCAML_REPO_COMMIT: "main"
+    OXCAML_REPO_COMMIT: "afddc8337950dbc02863fe30ae58735a1cf2719f"
 
 x-ocaml-epoll-build: &ocaml-epoll-build
   context: .
@@ -68,17 +68,17 @@ x-ocaml-epoll-build: &ocaml-epoll-build
   # switch and C epoll stubs hermetically; local macOS builds only run the
   # portable protocol tests.
   args:
-    OPAM_BASE_IMAGE: "ocaml/opam:debian-12-ocaml-5.2"
-    DEBIAN_RUNTIME_IMAGE: "debian:12-slim"
+    OPAM_BASE_IMAGE: "ocaml/opam:debian-12-ocaml-5.2@sha256:3a849fd15d393ad25192f508a8a0d5af21d77ff380c15e217c81a14cc1361e78"
+    DEBIAN_RUNTIME_IMAGE: "debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
     OXCAML_SWITCH: "5.2.0+ox"
-    OXCAML_REPO_COMMIT: "main"
+    OXCAML_REPO_COMMIT: "afddc8337950dbc02863fe30ae58735a1cf2719f"
 
 x-ocaml-websocket-build: &ocaml-websocket-build
   context: .
   dockerfile: docker/ocaml-websocket-async.Dockerfile
   args:
-    OPAM_BASE_IMAGE: "ocaml/opam:debian-12-ocaml-5.4"
-    DEBIAN_RUNTIME_IMAGE: "debian:12-slim"
+    OPAM_BASE_IMAGE: "ocaml/opam:debian-12-ocaml-5.4@sha256:32b5cf76c63c12391c01c177a03a3ea8dbc1b53272e64da36e8493d7a09d7530"
+    DEBIAN_RUNTIME_IMAGE: "debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
 
 # FLUSH_INTERVAL_MS: gateway-to-inference batch cadence. Clients still upload
 # 20 ms PCM frames immediately, but gateways flush larger per-session batches

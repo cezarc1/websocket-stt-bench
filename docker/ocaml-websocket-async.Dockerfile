@@ -1,8 +1,8 @@
 # Stock OCaml Async gateway image. Uses the upstream OCaml opam image while
 # keeping the hot transport path raw enough for a best-effort runtime result.
 
-ARG OPAM_BASE_IMAGE=ocaml/opam:debian-12-ocaml-5.4
-ARG DEBIAN_RUNTIME_IMAGE=debian:12-slim
+ARG OPAM_BASE_IMAGE=ocaml/opam:debian-12-ocaml-5.4@sha256:32b5cf76c63c12391c01c177a03a3ea8dbc1b53272e64da36e8493d7a09d7530
+ARG DEBIAN_RUNTIME_IMAGE=debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 
 # ---- Stage 1: deps + gateway build --------------------------------------
 FROM ${OPAM_BASE_IMAGE} AS build

@@ -147,22 +147,22 @@ jobs:
           - image: ocaml-oxcaml
             dockerfile: docker/ocaml-oxcaml.Dockerfile
             build_args: |
-              OPAM_BASE_IMAGE=ocaml/opam:debian-12-ocaml-5.2
-              DEBIAN_RUNTIME_IMAGE=debian:12-slim
+              OPAM_BASE_IMAGE=ocaml/opam:debian-12-ocaml-5.2@sha256:3a849fd15d393ad25192f508a8a0d5af21d77ff380c15e217c81a14cc1361e78
+              DEBIAN_RUNTIME_IMAGE=debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
               OXCAML_SWITCH=5.2.0+ox
-              OXCAML_REPO_COMMIT=main
+              OXCAML_REPO_COMMIT=afddc8337950dbc02863fe30ae58735a1cf2719f
           - image: ocaml-oxcaml-epoll
             dockerfile: docker/ocaml-oxcaml-epoll.Dockerfile
             build_args: |
-              OPAM_BASE_IMAGE=ocaml/opam:debian-12-ocaml-5.2
-              DEBIAN_RUNTIME_IMAGE=debian:12-slim
+              OPAM_BASE_IMAGE=ocaml/opam:debian-12-ocaml-5.2@sha256:3a849fd15d393ad25192f508a8a0d5af21d77ff380c15e217c81a14cc1361e78
+              DEBIAN_RUNTIME_IMAGE=debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
               OXCAML_SWITCH=5.2.0+ox
-              OXCAML_REPO_COMMIT=main
+              OXCAML_REPO_COMMIT=afddc8337950dbc02863fe30ae58735a1cf2719f
           - image: ocaml-websocket-async
             dockerfile: docker/ocaml-websocket-async.Dockerfile
             build_args: |
-              OPAM_BASE_IMAGE=ocaml/opam:debian-12-ocaml-5.4
-              DEBIAN_RUNTIME_IMAGE=debian:12-slim
+              OPAM_BASE_IMAGE=ocaml/opam:debian-12-ocaml-5.4@sha256:32b5cf76c63c12391c01c177a03a3ea8dbc1b53272e64da36e8493d7a09d7530
+              DEBIAN_RUNTIME_IMAGE=debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
           - image: loadgen
             dockerfile: docker/loadgen-rust.Dockerfile
             build_args: ""

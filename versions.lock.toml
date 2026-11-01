@@ -166,8 +166,12 @@ anyhow = "1.0.103"
 # then update `oxcaml_repo_commit`.
 opam = "2.5.1"
 oxcaml_switch = "5.2.0+ox"
-# Use a real commit SHA in production. Defaults to main for first-time setup.
-oxcaml_repo_commit = "main"
+# Pinned to oxcaml/opam-repository main as of 2026-10-07 ("Merge pull
+# request #62 from dra27/patching"), which is still main HEAD on 2026-11-01
+# and is what every successful ocaml-oxcaml / ocaml-oxcaml-epoll CI build
+# up to then resolved against. Keep docker-compose.yml, images.yml and the
+# two OxCaml Dockerfile ARG defaults in sync with this value.
+oxcaml_repo_commit = "afddc8337950dbc02863fe30ae58735a1cf2719f"
 
 [ocaml.dependencies]
 # OxCaml's opam-repository pins many of these to "+ox" variants whose
@@ -208,10 +212,11 @@ alcotest = "1.8.0"
 # ocaml/opam base + debian-slim runtime. The OxCaml switch is built from
 # source inside the build stage; on a cold build that's a 15+ minute step,
 # but it caches cleanly across rebuilds that don't change the switch.
-# TODO: pin both images by sha256 digest before merging (run
-# `docker pull ocaml/opam:debian-12-ocaml-5.2 && docker inspect --format='{{index .RepoDigests 0}}' ...`).
-opam_debian_12 = "ocaml/opam:debian-12-ocaml-5.2"
-debian_slim = "debian:12-slim"
+# Pinned by digest: an unpinned tag was rebuilt upstream (2026-10-30) with a
+# larger bundled opam-repository, which pushed the OxCaml solve past opam's
+# 60 s timeout and broke CI builds. Refresh with `docker buildx imagetools inspect`.
+opam_debian_12 = "ocaml/opam:debian-12-ocaml-5.2@sha256:3a849fd15d393ad25192f508a8a0d5af21d77ff380c15e217c81a14cc1361e78"
+debian_slim = "debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
 
 [ocaml_stock]
 # Stock upstream OCaml comparison point for the OxCaml gateway. The local
@@ -231,5 +236,5 @@ ppx_jane = "latest"
 alcotest = "latest"
 
 [containers.ocaml_stock]
-opam_debian_12 = "ocaml/opam:debian-12-ocaml-5.4"
-debian_slim = "debian:12-slim"
+opam_debian_12 = "ocaml/opam:debian-12-ocaml-5.4@sha256:32b5cf76c63c12391c01c177a03a3ea8dbc1b53272e64da36e8493d7a09d7530"
+debian_slim = "debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"

@@ -2,10 +2,10 @@
 # from docker/ocaml-oxcaml.Dockerfile so the accepted Async implementation
 # remains unchanged while the epoll experiment evolves.
 
-ARG OPAM_BASE_IMAGE=ocaml/opam:debian-12-ocaml-5.2
-ARG DEBIAN_RUNTIME_IMAGE=debian:12-slim
+ARG OPAM_BASE_IMAGE=ocaml/opam:debian-12-ocaml-5.2@sha256:3a849fd15d393ad25192f508a8a0d5af21d77ff380c15e217c81a14cc1361e78
+ARG DEBIAN_RUNTIME_IMAGE=debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 ARG OXCAML_SWITCH=5.2.0+ox
-ARG OXCAML_REPO_COMMIT=main
+ARG OXCAML_REPO_COMMIT=afddc8337950dbc02863fe30ae58735a1cf2719f
 
 FROM ${OPAM_BASE_IMAGE} AS build
 

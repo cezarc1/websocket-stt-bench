@@ -21,5 +21,8 @@ inferbench:
 
 inference:
   replicas: 3
+  # A rolling update would need room for 3 more 6-CPU pods.
+  strategy:
+    type: Recreate
   nodeSelector:
     kubernetes.io/hostname: cezar-4090

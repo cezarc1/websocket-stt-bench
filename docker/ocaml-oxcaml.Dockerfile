@@ -7,10 +7,10 @@
 # directly (`opam exec --switch 5.2.0+ox -- dune build` in
 # services/ocaml-oxcaml). This file is the reproducible CI/cluster path.
 
-ARG OPAM_BASE_IMAGE=ocaml/opam:debian-12-ocaml-5.2
-ARG DEBIAN_RUNTIME_IMAGE=debian:12-slim
+ARG OPAM_BASE_IMAGE=ocaml/opam:debian-12-ocaml-5.2@sha256:3a849fd15d393ad25192f508a8a0d5af21d77ff380c15e217c81a14cc1361e78
+ARG DEBIAN_RUNTIME_IMAGE=debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 ARG OXCAML_SWITCH=5.2.0+ox
-ARG OXCAML_REPO_COMMIT=main
+ARG OXCAML_REPO_COMMIT=afddc8337950dbc02863fe30ae58735a1cf2719f
 
 # ---- Stage 1: OxCaml switch + deps + gateway build ----------------------
 FROM ${OPAM_BASE_IMAGE} AS build
@@ -66,9 +66,13 @@ ENV DUNE_CACHE_ROOT=/home/opam/.cache/dune
 # We don't pin versions: the OxCaml repo invariant pins many of these to
 # +ox/~preview variants whose numbers diverge from upstream; opam
 # resolves the blessed flavor automatically.
+# OPAMSOLVERTIMEOUT: opam's 60 s default is too tight for this package set
+# against ox+default on a shared CI runner (2026-11-01 CI failed with
+# "resolution of the request timed out" at ~66 s). Raising it changes no
+# resolved versions, only how long the solver may search.
 RUN --mount=type=cache,target=/home/opam/.opam/download-cache,uid=1000,gid=1000 \
     eval "$(opam env --switch ${OXCAML_SWITCH})" \
- && opam install --yes --switch ${OXCAML_SWITCH} \
+ && OPAMSOLVERTIMEOUT=600 opam install --yes --switch ${OXCAML_SWITCH} \
     dune \
     base \
     core \
