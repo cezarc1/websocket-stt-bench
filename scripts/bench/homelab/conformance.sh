@@ -23,23 +23,27 @@ elixir:stt-elixir-phoenix-gateway:4000
 pythonGil:stt-python-fastapi-gil-gateway:8000
 pythonFt:stt-python-fastapi-ft-gateway:8000"
 if [ -n "${ONLY:-}" ]; then GWS=$(printf "%s\n" "$GWS" | grep -E "^($(echo "$ONLY" | tr ' ' '|')):"); fi
-SETS=(); ARGS=()
+SETS=()
 while IFS=: read -r key svc port; do
   SETS+=(--set "gateways.${key}.replicas=1")
-  ARGS+=("\"--service\",\"${svc}=ws://${svc}.stt-bench.svc.cluster.local:${port}/ws/stt\"")
 done <<< "$GWS"
 echo "[$(date +%T)] scaling gateways to 1 (tag $TAG, $PLACEMENT)"
 "${H[@]}" upgrade --install stt-bench "$REPO/charts/stt-bench" "${VALS[@]}" --set images.tag="$TAG" "${SETS[@]}" --wait --timeout 10m >/dev/null \
   || { echo "helm scale-up failed"; "${K[@]}" get pods -o wide; }
 "${K[@]}" get pods -o wide --no-headers | awk '{print $1, $3, $4, $7}'
-JOB=stt-conformance-all
-"${K[@]}" delete job $JOB --ignore-not-found >/dev/null 2>&1
-cat <<YAML | "${K[@]}" apply -f - >/dev/null
+# One Job per gateway (5 min deadline each): a failure prints its own reason
+# and a hung gateway cannot block the others.
+fails=0
+while IFS=: read -r key svc port; do
+  JOB="stt-conf-$(echo "$key" | tr 'A-Z' 'a-z')"
+  "${K[@]}" delete job "$JOB" --ignore-not-found >/dev/null 2>&1
+  cat <<YAML | "${K[@]}" apply -f - >/dev/null
 apiVersion: batch/v1
 kind: Job
 metadata: { name: $JOB }
 spec:
   backoffLimit: 0
+  activeDeadlineSeconds: 300
   ttlSecondsAfterFinished: 3600
   template:
     spec:
@@ -51,15 +55,20 @@ spec:
           image: ghcr.io/cezarc1/websocket-stt-bench/loadgen:$TAG
           imagePullPolicy: Always
           command: ["stt-conformance"]
-          args: [$(IFS=,; echo "${ARGS[*]}")]
-          resources: { requests: { cpu: "2", memory: 1Gi }, limits: { cpu: "2", memory: 1Gi } }
+          args: ["--service", "${svc}=ws://${svc}.stt-bench.svc.cluster.local:${port}/ws/stt"]
+          resources: { requests: { cpu: "250m", memory: 512Mi }, limits: { cpu: "2", memory: 1Gi } }
 YAML
-for _ in $(seq 1 240); do
-  s=$("${K[@]}" get job $JOB -o jsonpath='{.status.succeeded}{.status.failed}' 2>/dev/null)
-  [ -n "$s" ] && break; sleep 5
-done
-echo "[$(date +%T)] conformance output:"
-"${K[@]}" logs job/$JOB
+  "${K[@]}" wait --for=condition=complete --timeout=320s job/"$JOB" >/dev/null 2>&1 \
+    || "${K[@]}" wait --for=condition=failed --timeout=5s job/"$JOB" >/dev/null 2>&1
+  out=$("${K[@]}" logs job/"$JOB" 2>&1)
+  if printf '%s' "$out" | grep -q ' \.\.\. ok$'; then
+    echo "[$(date +%T)] $svc ... ok"
+  else
+    fails=$((fails + 1))
+    echo "[$(date +%T)] $svc ... FAILED"; printf '%s\n' "$out" | sed 's/^/    /' | tail -20
+  fi
+done <<< "$GWS"
+echo "[$(date +%T)] conformance: $fails failure(s)"
 "${K[@]}" get pods --no-headers | awk '$4!="0"{print "RESTARTED:", $1, $4}'
 echo "[$(date +%T)] scaling gateways back to 0"
 "${H[@]}" upgrade --install stt-bench "$REPO/charts/stt-bench" "${VALS[@]}" --set images.tag="$TAG" --wait --timeout 10m >/dev/null

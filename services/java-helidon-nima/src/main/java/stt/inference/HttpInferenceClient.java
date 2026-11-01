@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
@@ -52,8 +53,33 @@ public final class HttpInferenceClient implements Inference {
         this.jsonMapper = jsonMapper;
     }
 
+    /// Message of the exception Helidon 4.3.0 `IdleInputStream.endIdle` throws (wrapping an
+    /// `ExecutionException`) when a pooled HTTP/1.1 connection is reused during its idle monitor's
+    /// last 101 ms read: that read times out even though reuse cancelled the monitor, so the request
+    /// fails although it was healthy. It strikes when a connection sits idle for ~the read timeout
+    /// (2 s by default), which 1 s flush phase jitter makes reachable.
+    private static final String IDLE_MONITOR_RACE = "Exception in socket monitor thread.";
+
+    /// Posts once; if Helidon's idle-monitor race (above) killed a reused connection, posts once more
+    /// on a fresh one (the dead connection is marked closed and never pooled again). Inference is a
+    /// pure function of the body, so re-sending is safe, and this stays one call at a time per session.
     @Override
     public InferResponse infer(byte[] body, int cpuPasses) {
+        try {
+            return post(body, cpuPasses);
+        } catch (RuntimeException first) {
+            if (!lostIdleMonitorRace(first)) {
+                throw classify(first);
+            }
+        }
+        try {
+            return post(body, cpuPasses);
+        } catch (RuntimeException retryErr) {
+            throw classify(retryErr);
+        }
+    }
+
+    private InferResponse post(byte[] body, int cpuPasses) {
         try (HttpClientResponse response = pick().post()
                 .path(INFER_PATH)
                 .header(CPU_PASSES, Integer.toString(cpuPasses))
@@ -73,11 +99,16 @@ public final class HttpInferenceClient implements Inference {
                         false,
                         parseErr);
             }
-        } catch (InferenceException e) {
-            throw e;
-        } catch (RuntimeException e) {
-            throw classifyRequest(e);
         }
+    }
+
+    private static boolean lostIdleMonitorRace(Throwable err) {
+        return Stream.iterate(err, Objects::nonNull, Throwable::getCause)
+                .anyMatch(t -> IDLE_MONITOR_RACE.equals(t.getMessage()) && t.getCause() instanceof ExecutionException);
+    }
+
+    private static InferenceException classify(RuntimeException err) {
+        return err instanceof InferenceException classified ? classified : classifyRequest(err);
     }
 
     private WebClient pick() {
