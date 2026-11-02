@@ -7,7 +7,13 @@ REPO="$(cd "$(dirname "$0")/../../.." && pwd)"; cd "$REPO"; mkdir -p "$OUT/1vcpu
 ONE="rustSync cpp23UWebsockets rust ocamlOxcamlEpoll javaHelidonNima typescriptBun goNethttp ocamlOxcaml ocamlWebsocketAsync scalaPekko elixir pythonGil pythonFt pythonGil315 pythonFt315"
 # Single-loop runtimes (OCaml, Bun) cannot use a second vCPU and are not swept at 2.
 TWO="rustSync-2vcpu cpp23UWebsockets-2vcpu rust-2vcpu javaHelidonNima-2vcpu goNethttp-2vcpu scalaPekko-2vcpu elixir-2vcpu pythonGil-2vcpu pythonFt-2vcpu pythonGil315-2vcpu pythonFt315-2vcpu"
-scripts/bench/homelab/conformance.sh "$TAG" > "$OUT/conformance.log" 2>&1
+# Two batches: all 15 gateways at 4 GiB each plus inference do not fit the node's 64 GiB.
+: > "$OUT/conformance.log"
+set -- $ONE
+B1="${*:1:8}"; B2="${*:9}"
+for batch in "$B1" "$B2"; do
+  ONLY="$batch" scripts/bench/homelab/conformance.sh "$TAG" >> "$OUT/conformance.log" 2>&1
+done
 cat "$OUT/conformance.log"
 ok=()
 for k in $ONE; do
