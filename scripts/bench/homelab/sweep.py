@@ -20,7 +20,7 @@ Every point also records:
 
 Usage:
   scripts/bench/homelab/sweep.py --out results/homelab/<run> --placement values-colocated.yaml \
-      [--image-tag TAG] [--loadgen-cpu 12] rustSync cpp23UWebsockets ... rustSync-2vcpu ...
+      [--image-tag TAG] [--loadgen-cpu 12] [--loadgen-cpuset 16-31] rustSync cpp23UWebsockets ... rustSync-2vcpu ...
 Outputs per shape: <key>.points.jsonl, <key>.result.json, <key>.log, plus the
 summary/warn files run_point.sh writes (RESULTS_DIR = --out).
 """
@@ -139,7 +139,9 @@ class Sweep:
         if not items:
             return (False, 0, None, None)
         it = items[0]
-        cs = (it["status"].get("containerStatuses") or [{}])[0]
+        # By name: a pinned pod also runs a cpu-pin sidecar.
+        statuses = it["status"].get("containerStatuses") or [{}]
+        cs = next((c for c in statuses if c.get("name") == "gateway"), statuses[0])
         last = (cs.get("lastState") or {}).get("terminated") or {}
         return (bool(cs.get("ready")), int(cs.get("restartCount", 0)), last.get("reason"),
                 it["spec"].get("nodeName"))
@@ -159,13 +161,19 @@ class Sweep:
                 f"/api/v1/nodes/{NODE}/proxy/metrics/cadvisor"])
         out = {}
         pat = re.compile(r'^(container_cpu_usage_seconds_total|container_cpu_cfs_throttled_periods_total|'
-                         r'container_cpu_cfs_periods_total|container_memory_working_set_bytes)\{([^}]*)\} ([0-9.e+-]+) ([0-9]+)')
+                         r'container_cpu_cfs_periods_total|container_memory_working_set_bytes|'
+                         r'container_memory_max_usage_bytes|container_pressure_memory_stalled_seconds_total|'
+                         r'container_memory_failcnt)\{([^}]*)\} ([0-9.e+-]+) ([0-9]+)')
         for line in r.stdout.splitlines():
             m = pat.match(line)
             if not m:
                 continue
             lab = dict(re.findall(r'(\w+)="([^"]*)"', m.group(2)))
             if lab.get("namespace") != NS or not lab.get("container") or lab.get("cpu", "total") != "total":
+                continue
+            # Counters are summed per pod under one timestamp; the cpu-pin sidecar
+            # is sampled at a different time and would skew the window.
+            if lab["container"] == "cpu-pin":
                 continue
             d = out.setdefault(lab["pod"], {})
             d[m.group(1)] = d.get(m.group(1), 0.0) + float(m.group(3))
@@ -187,7 +195,16 @@ class Sweep:
             res[pod] = {"cores": round(u, 3), "throttled": round(thr / per, 3) if per > 0 else None,
                         # Working set is a gauge: value at the start and end of the window.
                         "mem0_mib": round(v0.get("container_memory_working_set_bytes", 0) / 2**20),
-                        "mem1_mib": round(v1.get("container_memory_working_set_bytes", 0) / 2**20)}
+                        "mem1_mib": round(v1.get("container_memory_working_set_bytes", 0) / 2**20),
+                        # Peak usage since the container started (includes page cache):
+                        # catches a spike between the two samples, e.g. during ramp-up.
+                        "peak_mib": round(v1.get("container_memory_max_usage_bytes", 0) / 2**20),
+                        # Memory pressure short of an OOM kill: PSI "some" stall time
+                        # per second (reclaim stalls) and hits on the cgroup limit.
+                        "mem_stall": round((v1.get("container_pressure_memory_stalled_seconds_total", 0)
+                                            - v0.get("container_pressure_memory_stalled_seconds_total", 0)) / dt, 4),
+                        "mem_limit_hits": int(v1.get("container_memory_failcnt", 0)
+                                              - v0.get("container_memory_failcnt", 0))}
         return res
 
     @staticmethod
@@ -199,6 +216,9 @@ class Sweep:
             "gw_cores": gw[0]["cores"] if gw else None,
             "gw_throttled": gw[0]["throttled"] if gw else None,
             "gw_mem_mib": [gw[0]["mem0_mib"], gw[0]["mem1_mib"]] if gw else None,
+            "gw_peak_mib": gw[0]["peak_mib"] if gw else None,
+            "gw_mem_stall": gw[0]["mem_stall"] if gw else None,
+            "gw_mem_limit_hits": gw[0]["mem_limit_hits"] if gw else None,
             "loadgen_mem_mib": lg[0]["mem1_mib"] if lg else None,
             "loadgen_cores": lg[0]["cores"] if lg else None,
             "loadgen_throttled": lg[0]["throttled"] if lg else None,
@@ -213,7 +233,9 @@ class Sweep:
         env = dict(os.environ, SVC=svc, PORT=str(port), LABEL=label, CTX=CTX, NS=NS,
                    LOADGEN_IMG=f"ghcr.io/cezarc1/websocket-stt-bench/loadgen:{self.a.loadgen_tag or self.a.image_tag}",
                    LOADGEN_NODE=NODE, RESULTS_DIR=str(self.out), VERIFY_EVERY=str(self.a.verify_every),
-                   LOADGEN_CPU=str(self.a.loadgen_cpu), LOADGEN_MEM=f"{self.a.loadgen_cpu}Gi")
+                   LOADGEN_CPU=str(self.a.loadgen_cpu), LOADGEN_MEM=f"{self.a.loadgen_cpu}Gi",
+                   LOADGEN_THREADS=str(self.a.loadgen_threads or self.a.loadgen_cpu),
+                   LOADGEN_CPUSET=self.a.loadgen_cpuset or "")
         proc = subprocess.Popen(["bash", str(REPO / "scripts/bench/run_point.sh"), str(n)],
                                 env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         cpu = {}
@@ -380,6 +402,8 @@ def main():
     p.add_argument("--image-tag", default="colocated-rerun")
     p.add_argument("--loadgen-tag", default=None)
     p.add_argument("--loadgen-cpu", type=int, default=12)
+    p.add_argument("--loadgen-threads", type=int, default=None, help="default: --loadgen-cpu")
+    p.add_argument("--loadgen-cpuset", default=None, help="taskset CPU list for the loadgen, e.g. 16-31")
     p.add_argument("--verify-every", type=int, default=1)
     p.add_argument("keys", nargs="*")
     a = p.parse_args()

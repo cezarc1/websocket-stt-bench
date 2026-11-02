@@ -13,6 +13,10 @@ images:
   tag: main
   pullPolicy: Always
 
+# Host CPU list every gateway pod is pinned to (cpu-pin sidecar, taskset);
+# a gateway's own cpuAffinity overrides it. Empty = unpinned.
+gatewayCpuAffinity: ""
+
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65532
@@ -51,6 +55,8 @@ inference:
   strategy: {}
   image: inference-server
   replicas: 1
+  # Host CPU list to pin the server to with taskset (e.g. "12-15"). Empty = unpinned.
+  cpuAffinity: ""
   port: 9000
   env:
     WORKER_THREADS: "6"
