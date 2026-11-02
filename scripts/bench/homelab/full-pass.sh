@@ -4,9 +4,9 @@
 set -uo pipefail
 OUT=${1:?out dir}; TAG=${2:-colocated-rerun}
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"; cd "$REPO"; mkdir -p "$OUT/1vcpu" "$OUT/2vcpu"
-ONE="rustSync cpp23UWebsockets rust ocamlOxcamlEpoll javaHelidonNima typescriptBun goNethttp ocamlOxcaml ocamlWebsocketAsync scalaPekko elixir pythonGil pythonFt"
+ONE="rustSync cpp23UWebsockets rust ocamlOxcamlEpoll javaHelidonNima typescriptBun goNethttp ocamlOxcaml ocamlWebsocketAsync scalaPekko elixir pythonGil pythonFt pythonGil315 pythonFt315"
 # Single-loop runtimes (OCaml, Bun) cannot use a second vCPU and are not swept at 2.
-TWO="rustSync-2vcpu cpp23UWebsockets-2vcpu rust-2vcpu javaHelidonNima-2vcpu goNethttp-2vcpu scalaPekko-2vcpu elixir-2vcpu pythonGil-2vcpu pythonFt-2vcpu"
+TWO="rustSync-2vcpu cpp23UWebsockets-2vcpu rust-2vcpu javaHelidonNima-2vcpu goNethttp-2vcpu scalaPekko-2vcpu elixir-2vcpu pythonGil-2vcpu pythonFt-2vcpu pythonGil315-2vcpu pythonFt315-2vcpu"
 scripts/bench/homelab/conformance.sh "$TAG" > "$OUT/conformance.log" 2>&1
 cat "$OUT/conformance.log"
 ok=()

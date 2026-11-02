@@ -20,7 +20,7 @@ Every point also records:
 
 Usage:
   scripts/bench/homelab/sweep.py --out results/homelab/<run> --placement values-colocated.yaml \
-      [--image-tag TAG] [--loadgen-cpu 12] [--loadgen-cpuset 16-31] rustSync cpp23UWebsockets ... rustSync-2vcpu ...
+      [--image-tag TAG] [--loadgen-cpu 8] [--loadgen-cpuset 4-11] rustSync cpp23UWebsockets ... rustSync-2vcpu ...
 Outputs per shape: <key>.points.jsonl, <key>.result.json, <key>.log, plus the
 summary/warn files run_point.sh writes (RESULTS_DIR = --out).
 """
@@ -401,9 +401,12 @@ def main():
     p.add_argument("--placement", default="values-colocated.yaml")
     p.add_argument("--image-tag", default="colocated-rerun")
     p.add_argument("--loadgen-tag", default=None)
-    p.add_argument("--loadgen-cpu", type=int, default=12)
+    # cezar-4090 layout (see charts/stt-bench/values-colocated.yaml): the loadgen
+    # owns P-cores 4-11 with one Tokio worker per CPU. Pass --loadgen-cpuset ""
+    # to run it unpinned.
+    p.add_argument("--loadgen-cpu", type=int, default=8)
     p.add_argument("--loadgen-threads", type=int, default=None, help="default: --loadgen-cpu")
-    p.add_argument("--loadgen-cpuset", default=None, help="taskset CPU list for the loadgen, e.g. 16-31")
+    p.add_argument("--loadgen-cpuset", default="4-11", help="taskset CPU list for the loadgen")
     p.add_argument("--verify-every", type=int, default=1)
     p.add_argument("keys", nargs="*")
     a = p.parse_args()
