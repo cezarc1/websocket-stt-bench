@@ -142,7 +142,7 @@ gateways:
     port: 4000
     env:
       WORKER_THREADS: "2"
-      FINCH_POOL_COUNT: "50"
+      FINCH_POOL_COUNT: "512"
     resources:
       requests:
         cpu: "2"

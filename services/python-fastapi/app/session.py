@@ -86,15 +86,18 @@ class SttSession:
                 self.closing = True
                 flusher.cancel()
                 # Never let the handler return while Granian still runs a receive/send
-                # for this socket. Granian 2.7.4 holds the transport's tokio mutex across
-                # the network await, and on handler exit its watcher (done()/err()) takes
-                # that mutex with blocking_lock() while holding the GIL on the event-loop
-                # thread. A cancelled-but-still-running send (peer not reading) therefore
-                # froze the whole worker: 0% CPU, /health dead, until the pod was killed.
-                # So: finish the current send (the writer exits after it, because
+                # for this socket. Granian holds the transport's tokio mutex across the
+                # network await. Through 2.7.7 its handler-exit watcher (done()/err()) took
+                # that mutex with blocking_lock() on the event-loop thread, so a
+                # cancelled-but-still-running send (peer not reading) froze the whole
+                # worker: 0% CPU, /health dead, until the pod was killed. Since 2.7.8
+                # teardown uses try_lock() (2.8.7: ASGIWebsocketProtocol::tx), so it no
+                # longer freezes, but a miss detaches the transport without its writer
+                # half: the close frame is skipped and the send keeps running orphaned.
+                # So, still: finish the current send (the writer exits after it, because
                 # `closing` is set), then cancel the writer while it is parked on the
-                # outbox, which touches no transport. No timeout on purpose: cancelling
-                # after one re-creates the freeze; a dead peer fails the send at once.
+                # outbox, which touches no transport. No timeout on purpose: a dead peer
+                # fails the send at once.
                 if self.sending:
                     await asyncio.wait((writer,))
                 writer.cancel()
@@ -141,9 +144,11 @@ class SttSession:
             try:
                 await self.websocket.send_text(text)
             except Exception:
-                # Peer is gone. End the session, but don't fail the TaskGroup: that
-                # would cancel the pending receive() mid-flight (same Granian hazard
-                # as above); the receive loop sees `closing` and returns instead.
+                # Peer is gone, or the receive loop already closed the socket (Starlette
+                # raises RuntimeError on send after close; Granian >= 2.8.4 itself no
+                # longer raises on a closed transport). End the session, but don't fail
+                # the TaskGroup: that would cancel the pending receive() mid-flight (same
+                # Granian hazard as above); the receive loop sees `closing` and returns.
                 self.closing = True
                 return
             finally:

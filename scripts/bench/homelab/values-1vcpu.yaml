@@ -20,7 +20,7 @@ gateways:
     env: { WORKER_THREADS: "1", INFERENCE_HTTP_CLIENTS: "512" }
     resources: { requests: { cpu: "1", memory: 2Gi }, limits: { cpu: "1", memory: 2Gi } }
   elixir:
-    env: { WORKER_THREADS: "1", FINCH_POOL_COUNT: "50" }
+    env: { WORKER_THREADS: "1", FINCH_POOL_COUNT: "512" }
     resources: { requests: { cpu: "1", memory: 2Gi }, limits: { cpu: "1", memory: 2Gi } }
   # Same Granian shape as the GIL build at 1 vCPU (st mode, uvloop) so only the
   # interpreter differs; null removes the chart's GRANIAN_LOOPS (which selects mt).

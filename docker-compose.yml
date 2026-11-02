@@ -101,7 +101,7 @@ x-python-env: &python-env
 x-elixir-env: &elixir-env
   CPU_PASSES: "4"
   MODEL_DELAY_MS: "75"
-  FINCH_POOL_COUNT: "50"
+  FINCH_POOL_COUNT: "512"
   FLUSH_INTERVAL_MS: "1000"
   FLUSH_PHASE_JITTER_MS: "1000"
   PORT: "4000"

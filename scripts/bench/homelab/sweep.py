@@ -52,7 +52,7 @@ GATEWAYS = {
     "scalaPekko": ("stt-scala-pekko-gateway", 2500, 650),
     "elixir": ("stt-elixir-phoenix-gateway", 4000, 1250),
     "pythonGil": ("stt-python-fastapi-gil-gateway", 8000, 1025),
-    "pythonFt": ("stt-python-fastapi-ft-gateway", 8000, 175),
+    "pythonFt": ("stt-python-fastapi-ft-gateway", 8000, 1000),
 }
 _CPU2 = ["resources.requests.cpu=2", "resources.limits.cpu=2"]
 # 2-vCPU shapes: dedicated -2vcpu chart variants where they exist, else the
@@ -70,7 +70,7 @@ GATEWAYS_2V = {
     "elixir-2vcpu": ("stt-elixir-phoenix-gateway", 4000, 2100, "elixir", _CPU2 + ["env.WORKER_THREADS=2"]),
     "pythonGil-2vcpu": ("stt-python-fastapi-gil-gateway", 8000, 1500, "pythonGil",
                         _CPU2 + ["env.WORKER_THREADS=2", "env.GRANIAN_LOOPS=2"]),
-    "pythonFt-2vcpu": ("stt-python-fastapi-ft-gateway", 8000, 200, "pythonFt",
+    "pythonFt-2vcpu": ("stt-python-fastapi-ft-gateway", 8000, 1500, "pythonFt",
                        _CPU2 + ["env.WORKER_THREADS=2", "env.GRANIAN_LOOPS=2", "env.GRANIAN_LOOP_KIND=uvloop"]),
 }
 ALL = {**GATEWAYS, **GATEWAYS_2V}
@@ -296,7 +296,8 @@ class Sweep:
             if probe(n):
                 lo = n
                 while hi is None and n <= prior * 3:
-                    n = self.rnd(n * 1.1, s)
+                    # Rounding to the step can return n itself; always move a full step.
+                    n = max(self.rnd(n * 1.1, s), n + s)
                     if probe(n):
                         lo = n
                     else:
@@ -304,7 +305,7 @@ class Sweep:
             else:
                 hi = n
                 while lo is None and n > s:
-                    n = self.rnd(n * 0.85, s)
+                    n = min(self.rnd(n * 0.85, s), n - s)
                     if probe(n):
                         lo = n
                     else:
@@ -331,6 +332,8 @@ class Sweep:
                 self.log(f"{key} {cand} borderline {runs[cand]}", fh)
                 lower = [k for k, v in runs.items() if k < cand and v and all(v)]
                 cand = max(lower) if lower else cand - self.step_for(cand)
+                if cand <= 0:
+                    break
                 if cand not in runs:
                     runs[cand] = [bool(self.point(key, svc, port, cand, fh, pts))]
                     if not runs[cand][0]:
