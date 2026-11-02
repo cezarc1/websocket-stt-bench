@@ -98,10 +98,10 @@ gateways:
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   goNethttp:
     enabled: true
     name: stt-go-nethttp-gateway
@@ -114,10 +114,10 @@ gateways:
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   goNethttp2cpu:
     enabled: true
     name: stt-go-nethttp-2vcpu-gateway
@@ -130,10 +130,10 @@ gateways:
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   elixir:
     enabled: true
     name: stt-elixir-phoenix-gateway
@@ -146,10 +146,10 @@ gateways:
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   pythonFt:
     enabled: true
     name: stt-python-fastapi-ft-gateway
@@ -162,10 +162,10 @@ gateways:
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   pythonGil:
     enabled: true
     name: stt-python-fastapi-gil-gateway
@@ -181,10 +181,10 @@ gateways:
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   typescriptBun:
     enabled: true
     name: stt-typescript-bun-gateway
@@ -196,10 +196,10 @@ gateways:
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   javaHelidonNima:
     enabled: true
     name: stt-java-helidon-nima-gateway
@@ -213,14 +213,14 @@ gateways:
       # JEP 491 (JDK 24) removes synchronized-induced pinning. For dev pin
       # investigation use JFR's jdk.VirtualThreadPinned event (recipe in
       # docker/java-helidon-nima.Dockerfile); -Djdk.tracePinnedThreads is gone.
-      JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch -XX:MaxDirectMemorySize=128m -XX:+ExitOnOutOfMemoryError"
+      JAVA_OPTS: "-XX:+UseZGC -Xms3g -Xmx3g -XX:+AlwaysPreTouch -XX:MaxDirectMemorySize=128m -XX:+ExitOnOutOfMemoryError"
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   javaHelidonNima2cpu:
     enabled: true
     name: stt-java-helidon-nima-2vcpu-gateway
@@ -230,14 +230,14 @@ gateways:
     env:
       WORKER_THREADS: "2"
       INFERENCE_HTTP_CLIENTS: "4"
-      JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch -XX:MaxDirectMemorySize=128m -XX:+ExitOnOutOfMemoryError"
+      JAVA_OPTS: "-XX:+UseZGC -Xms3g -Xmx3g -XX:+AlwaysPreTouch -XX:MaxDirectMemorySize=128m -XX:+ExitOnOutOfMemoryError"
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   scalaPekko:
     enabled: true
     name: stt-scala-pekko-gateway
@@ -247,14 +247,14 @@ gateways:
     env:
       WORKER_THREADS: "1"
       INFERENCE_HTTP_CLIENTS: "4"
-      JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
+      JAVA_OPTS: "-XX:+UseZGC -Xms3g -Xmx3g -XX:+AlwaysPreTouch"
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   scalaPekko2cpu:
     enabled: true
     name: stt-scala-pekko-2vcpu-gateway
@@ -264,14 +264,14 @@ gateways:
     env:
       WORKER_THREADS: "2"
       INFERENCE_HTTP_CLIENTS: "4"
-      JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
+      JAVA_OPTS: "-XX:+UseZGC -Xms3g -Xmx3g -XX:+AlwaysPreTouch"
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   cpp23UWebsockets:
     enabled: true
     name: stt-cpp23-uwebsockets-gateway
@@ -284,10 +284,10 @@ gateways:
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   cpp23UWebsockets2cpu:
     enabled: true
     name: stt-cpp23-uwebsockets-2vcpu-gateway
@@ -300,10 +300,10 @@ gateways:
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   ocamlOxcaml:
     enabled: true
     name: stt-ocaml-oxcaml-gateway
@@ -316,10 +316,10 @@ gateways:
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   ocamlOxcamlEpoll:
     enabled: true
     name: stt-ocaml-oxcaml-epoll-gateway
@@ -332,10 +332,10 @@ gateways:
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   ocamlOxcaml2cpu:
     enabled: true
     name: stt-ocaml-oxcaml-2vcpu-gateway
@@ -348,10 +348,10 @@ gateways:
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   rustSync:
     enabled: true
     name: stt-rust-sync-gateway
@@ -363,10 +363,10 @@ gateways:
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   rustSync2cpu:
     enabled: true
     name: stt-rust-sync-2vcpu-gateway
@@ -378,10 +378,10 @@ gateways:
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   ocamlWebsocketAsync:
     enabled: true
     name: stt-ocaml-websocket-async-gateway
@@ -394,10 +394,10 @@ gateways:
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   ocamlWebsocketAsync2cpu:
     enabled: true
     name: stt-ocaml-websocket-async-2vcpu-gateway
@@ -410,10 +410,10 @@ gateways:
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
 
 loadgen:
   enabled: true

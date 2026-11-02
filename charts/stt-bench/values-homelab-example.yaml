@@ -47,115 +47,115 @@ gateways:
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   goNethttp:
     replicas: 0
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   goNethttp2cpu:
     replicas: 0
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   elixir:
     replicas: 0
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   pythonFt:
     replicas: 0
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   pythonGil:
     replicas: 0
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   typescriptBun:
     replicas: 0
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   javaHelidonNima:
     replicas: 0
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   javaHelidonNima2cpu:
     replicas: 0
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   rustSync:
     replicas: 0
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   rustSync2cpu:
     replicas: 0
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   ocamlWebsocketAsync:
     replicas: 0
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   ocamlWebsocketAsync2cpu:
     replicas: 0
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi

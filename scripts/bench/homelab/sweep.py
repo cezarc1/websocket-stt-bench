@@ -20,7 +20,7 @@ Every point also records:
 
 Usage:
   scripts/bench/homelab/sweep.py --out results/homelab/<run> --placement values-colocated.yaml \
-      [--image-tag TAG] [--loadgen-cpu 8] rustSync cpp23UWebsockets ... rustSync-2vcpu ...
+      [--image-tag TAG] [--loadgen-cpu 12] rustSync cpp23UWebsockets ... rustSync-2vcpu ...
 Outputs per shape: <key>.points.jsonl, <key>.result.json, <key>.log, plus the
 summary/warn files run_point.sh writes (RESULTS_DIR = --out).
 """
@@ -153,7 +153,7 @@ class Sweep:
                 f"/api/v1/nodes/{NODE}/proxy/metrics/cadvisor"])
         out = {}
         pat = re.compile(r'^(container_cpu_usage_seconds_total|container_cpu_cfs_throttled_periods_total|'
-                         r'container_cpu_cfs_periods_total)\{([^}]*)\} ([0-9.e+-]+) ([0-9]+)')
+                         r'container_cpu_cfs_periods_total|container_memory_working_set_bytes)\{([^}]*)\} ([0-9.e+-]+) ([0-9]+)')
         for line in r.stdout.splitlines():
             m = pat.match(line)
             if not m:
@@ -178,7 +178,10 @@ class Sweep:
             u = (v1.get("container_cpu_usage_seconds_total", 0) - v0.get("container_cpu_usage_seconds_total", 0)) / dt
             per = v1.get("container_cpu_cfs_periods_total", 0) - v0.get("container_cpu_cfs_periods_total", 0)
             thr = v1.get("container_cpu_cfs_throttled_periods_total", 0) - v0.get("container_cpu_cfs_throttled_periods_total", 0)
-            res[pod] = {"cores": round(u, 3), "throttled": round(thr / per, 3) if per > 0 else None}
+            res[pod] = {"cores": round(u, 3), "throttled": round(thr / per, 3) if per > 0 else None,
+                        # Working set is a gauge: value at the start and end of the window.
+                        "mem0_mib": round(v0.get("container_memory_working_set_bytes", 0) / 2**20),
+                        "mem1_mib": round(v1.get("container_memory_working_set_bytes", 0) / 2**20)}
         return res
 
     @staticmethod
@@ -189,9 +192,13 @@ class Sweep:
         return {
             "gw_cores": gw[0]["cores"] if gw else None,
             "gw_throttled": gw[0]["throttled"] if gw else None,
+            "gw_mem_mib": [gw[0]["mem0_mib"], gw[0]["mem1_mib"]] if gw else None,
+            "loadgen_mem_mib": lg[0]["mem1_mib"] if lg else None,
             "loadgen_cores": lg[0]["cores"] if lg else None,
             "loadgen_throttled": lg[0]["throttled"] if lg else None,
             "inference_cores": round(sum(v["cores"] for v in inf), 3) if inf else None,
+            # HTTP/2 connections pin to one replica, so check the busiest one too.
+            "inference_max_throttled": max((v["throttled"] or 0) for v in inf) if inf else None,
         }
 
     # ---- one point ---------------------------------------------------------
@@ -243,12 +250,20 @@ class Sweep:
         if (lgt is not None and lgt > 0.02) or (lgc is not None and lgc > 0.85 * self.a.loadgen_cpu):
             rec["loadgen_bound"] = True
         restarted = h0 is None or h1 is None or h1[1] != h0[1]
+        # Running out of memory at this load is the gateway failing, not a fluke to retry.
+        oom = restarted and h1 is not None and h1[2] == "OOMKilled"
+        if oom:
+            rec["oom"] = True
+            rec["pass"] = False
+            ok = False
+            restarted = False
         if restarted:
             rec["invalid"] = True
         pts.write(json.dumps(rec) + "\n")
         pts.flush()
         flag = " INVALID(restart/unready)" if restarted else ""
         flag += " LOADGEN-BOUND" if rec.get("loadgen_bound") else ""
+        flag += " OOM" if oom else ""
         self.log(f"{key} {line}{flag} | cpu {cpu} restarts {rec['restarts_before']}->{rec['restarts_after']}"
                  f" {rec['last_reason'] or ''}", fh)
         if restarted and retry:
@@ -358,7 +373,7 @@ def main():
     p.add_argument("--placement", default="values-colocated.yaml")
     p.add_argument("--image-tag", default="colocated-rerun")
     p.add_argument("--loadgen-tag", default=None)
-    p.add_argument("--loadgen-cpu", type=int, default=8)
+    p.add_argument("--loadgen-cpu", type=int, default=12)
     p.add_argument("--verify-every", type=int, default=1)
     p.add_argument("keys", nargs="*")
     a = p.parse_args()

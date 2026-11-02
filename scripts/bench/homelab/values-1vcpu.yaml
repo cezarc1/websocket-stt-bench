@@ -18,12 +18,12 @@ results:
 gateways:
   rust:
     env: { WORKER_THREADS: "1", INFERENCE_HTTP_CLIENTS: "512" }
-    resources: { requests: { cpu: "1", memory: 2Gi }, limits: { cpu: "1", memory: 2Gi } }
+    resources: { requests: { cpu: "1", memory: 4Gi }, limits: { cpu: "1", memory: 4Gi } }
   elixir:
     env: { WORKER_THREADS: "1", FINCH_POOL_COUNT: "512" }
-    resources: { requests: { cpu: "1", memory: 2Gi }, limits: { cpu: "1", memory: 2Gi } }
+    resources: { requests: { cpu: "1", memory: 4Gi }, limits: { cpu: "1", memory: 4Gi } }
   # Same Granian shape as the GIL build at 1 vCPU (st mode, uvloop) so only the
   # interpreter differs; null removes the chart's GRANIAN_LOOPS (which selects mt).
   pythonFt:
     env: { WORKER_THREADS: "1", GRANIAN_LOOPS: null, GRANIAN_LOOP_KIND: uvloop, GRANIAN_TASK_IMPL: asyncio }
-    resources: { requests: { cpu: "1", memory: 2Gi }, limits: { cpu: "1", memory: 2Gi } }
+    resources: { requests: { cpu: "1", memory: 4Gi }, limits: { cpu: "1", memory: 4Gi } }
