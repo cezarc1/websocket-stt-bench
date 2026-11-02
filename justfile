@@ -75,6 +75,10 @@ python-check: py-sync py-test
     cd services/python-fastapi && ../../.tools/bin/uv run ruff check .
     cd services/python-fastapi && ../../.tools/bin/uv run ty check
 
+# CPython 3.15.2t / 3.15.2 lane (container-only interpreters): pytest + ty in Docker.
+python315-check:
+    bash scripts/py315-check.sh
+
 ts-install: ensure-bun
     cd services/typescript-bun && PATH="$PWD/../../.tools/bin:$PATH" ../../.tools/bin/bun install --frozen-lockfile
 

@@ -335,6 +335,57 @@ services:
     ports:
       - "8003:8000"
 
+  # CPython 3.15.2 / 3.15.2t lane: identical app code and service shape to
+  # python-fastapi-stock-single / python-fastapi-stock-gil-single; only the
+  # interpreter, manylinux digest and lock (services/python-fastapi/py315) differ.
+  python-fastapi-stock-ft315-single:
+    <<: *app-single
+    profiles: ["single"]
+    build:
+      context: .
+      dockerfile: docker/python-fastapi.Dockerfile
+      args:
+        PYTHON_FT_IMAGE: "quay.io/pypa/manylinux_2_28_aarch64@sha256:54b271d9562a3686298880df05367909e949ed317e7b1b79b59c696d75f78676"
+        UV_IMAGE: "ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a"
+        UV_VERSION: "0.11.7"
+        PY_DIR: "cp315-cp315t"
+        PY_EXE: "python3.15t"
+        PY_VERSION_EXPECTED: "3.15.2"
+        PY_PROJECT_DIR: "services/python-fastapi/py315"
+    depends_on: *needs-inference
+    environment:
+      <<: *python-env
+      WORKER_THREADS: "1"
+    ports:
+      - "8004:8000"
+
+  python-fastapi-stock-gil315-single:
+    <<: *app-single
+    profiles: ["single"]
+    build:
+      context: .
+      dockerfile: docker/python-fastapi.Dockerfile
+      args:
+        PYTHON_FT_IMAGE: "quay.io/pypa/manylinux_2_28_aarch64@sha256:54b271d9562a3686298880df05367909e949ed317e7b1b79b59c696d75f78676"
+        UV_IMAGE: "ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a"
+        UV_VERSION: "0.11.7"
+        PY_VARIANT: "gil"
+        PY_DIR: "cp315-cp315"
+        PY_EXE: "python3.15"
+        PY_GIL_DISABLED_EXPECTED: "0"
+        PY_VERSION_EXPECTED: "3.15.2"
+        PY_PROJECT_DIR: "services/python-fastapi/py315"
+    depends_on: *needs-inference
+    environment:
+      <<: *python-env
+      WORKER_THREADS: "1"
+      PY_VARIANT: "gil"
+      GRANIAN_LOOP_KIND: "${GRANIAN_LOOP_KIND:-uvloop}"
+      GRANIAN_TASK_IMPL: "${GRANIAN_TASK_IMPL:-asyncio}"
+      GRANIAN_RUNTIME_THREADS: "${GRANIAN_RUNTIME_THREADS:-}"
+    ports:
+      - "8005:8000"
+
   # Free-threading multi-loop (N asyncio loops in one CPython interpreter
   # without GIL contention).
   #

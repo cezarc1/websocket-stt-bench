@@ -185,6 +185,44 @@ gateways:
       limits:
         cpu: "1"
         memory: 4Gi
+  # CPython 3.15.2t / 3.15.2 builds of the same gateway code; shapes mirror
+  # pythonFt / pythonGil exactly so only the interpreter (and the deps that
+  # needed cp315 wheels, see services/python-fastapi/py315) differ.
+  pythonFt315:
+    enabled: true
+    name: stt-python-fastapi-ft315-gateway
+    image: python-fastapi-ft315
+    replicas: 0
+    port: 8000
+    env:
+      WORKER_THREADS: "2"
+      GRANIAN_LOOPS: "2"
+    resources:
+      requests:
+        cpu: "2"
+        memory: 4Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+  pythonGil315:
+    enabled: true
+    name: stt-python-fastapi-gil315-gateway
+    image: python-fastapi-gil315
+    replicas: 0
+    port: 8000
+    env:
+      WORKER_THREADS: "1"
+      PY_VARIANT: gil
+      GRANIAN_LOOP_KIND: uvloop
+      GRANIAN_TASK_IMPL: asyncio
+      GRANIAN_RUNTIME_THREADS: ""
+    resources:
+      requests:
+        cpu: "1"
+        memory: 4Gi
+      limits:
+        cpu: "1"
+        memory: 4Gi
   typescriptBun:
     enabled: true
     name: stt-typescript-bun-gateway

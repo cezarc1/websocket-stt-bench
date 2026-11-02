@@ -55,6 +55,34 @@ if sys._is_gil_enabled():
     raise SystemExit("python: expected free-threading GIL disabled")
 PY
 
+# CPython 3.15 lane is container-only (the manylinux image provides the
+# interpreter, and the image build asserts it), so doctor checks that its
+# pins agree across versions.lock.toml, its pyproject and the image builds.
+PY315_EXPECTED="$(version_value python315 version)"
+PY315_PYPROJECT="$ROOT/$(version_value python315 pyproject)"
+PY315_IMAGE="$(version_value containers.python315 manylinux_2_28_x86_64)"
+grep -qx "requires-python = \"==$PY315_EXPECTED\"" "$PY315_PYPROJECT" || {
+  echo "python315: $PY315_PYPROJECT must declare requires-python = \"==$PY315_EXPECTED\"" >&2
+  exit 1
+}
+for dep in aiohttp fastapi granian pydantic wsproto; do
+  pin="$(version_value python315.dependencies "$dep")"
+  grep -Eq "^ *\"$dep(\[[a-z,]+\])?==$pin\"" "$PY315_PYPROJECT" || {
+    echo "python315: $PY315_PYPROJECT must pin $dep==$pin" >&2
+    exit 1
+  }
+done
+for f in .github/workflows/images.yml scripts/bench/homelab/local-builds.txt; do
+  [ "$(grep -c "$PY315_IMAGE" "$ROOT/$f")" -ge 2 ] || {
+    echo "python315: $f must build both 3.15 images from $PY315_IMAGE" >&2
+    exit 1
+  }
+  [ "$(grep -c "PY_VERSION_EXPECTED=$PY315_EXPECTED" "$ROOT/$f")" -ge 2 ] || {
+    echo "python315: $f must pass PY_VERSION_EXPECTED=$PY315_EXPECTED to both 3.15 images" >&2
+    exit 1
+  }
+done
+
 ELIXIR_VERSION="$(elixir -e 'IO.write(System.version())')"
 expect_version "$ELIXIR_VERSION" "$ELIXIR_EXPECTED" "elixir"
 

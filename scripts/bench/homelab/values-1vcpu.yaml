@@ -27,3 +27,6 @@ gateways:
   pythonFt:
     env: { WORKER_THREADS: "1", GRANIAN_LOOPS: null, GRANIAN_LOOP_KIND: uvloop, GRANIAN_TASK_IMPL: asyncio }
     resources: { requests: { cpu: "1", memory: 4Gi }, limits: { cpu: "1", memory: 4Gi } }
+  pythonFt315:
+    env: { WORKER_THREADS: "1", GRANIAN_LOOPS: null, GRANIAN_LOOP_KIND: uvloop, GRANIAN_TASK_IMPL: asyncio }
+    resources: { requests: { cpu: "1", memory: 4Gi }, limits: { cpu: "1", memory: 4Gi } }

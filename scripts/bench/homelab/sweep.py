@@ -53,6 +53,8 @@ GATEWAYS = {
     "elixir": ("stt-elixir-phoenix-gateway", 4000, 1250),
     "pythonGil": ("stt-python-fastapi-gil-gateway", 8000, 1025),
     "pythonFt": ("stt-python-fastapi-ft-gateway", 8000, 1000),
+    "pythonGil315": ("stt-python-fastapi-gil315-gateway", 8000, 1000),
+    "pythonFt315": ("stt-python-fastapi-ft315-gateway", 8000, 1000),
 }
 _CPU2 = ["resources.requests.cpu=2", "resources.limits.cpu=2"]
 # 2-vCPU shapes: dedicated -2vcpu chart variants where they exist, else the
@@ -72,6 +74,10 @@ GATEWAYS_2V = {
                         _CPU2 + ["env.WORKER_THREADS=2", "env.GRANIAN_LOOPS=2"]),
     "pythonFt-2vcpu": ("stt-python-fastapi-ft-gateway", 8000, 1500, "pythonFt",
                        _CPU2 + ["env.WORKER_THREADS=2", "env.GRANIAN_LOOPS=2", "env.GRANIAN_LOOP_KIND=uvloop"]),
+    "pythonGil315-2vcpu": ("stt-python-fastapi-gil315-gateway", 8000, 1500, "pythonGil315",
+                           _CPU2 + ["env.WORKER_THREADS=2", "env.GRANIAN_LOOPS=2"]),
+    "pythonFt315-2vcpu": ("stt-python-fastapi-ft315-gateway", 8000, 1500, "pythonFt315",
+                          _CPU2 + ["env.WORKER_THREADS=2", "env.GRANIAN_LOOPS=2", "env.GRANIAN_LOOP_KIND=uvloop"]),
 }
 ALL = {**GATEWAYS, **GATEWAYS_2V}
 

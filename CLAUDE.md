@@ -55,6 +55,7 @@ If you add a new code path that spawns inference work per flush, preserve this g
 
 - The repo ships its own pinned `uv` into `.tools/bin/` via `scripts/ensure-uv.sh` — always invoke uv as `.tools/bin/uv`, never the system one.
 - Python is `3.14.4t` (free-threading). The FastAPI app aborts startup if `Py_GIL_DISABLED != 1` or `sys._is_gil_enabled()` is true (`services/python-fastapi/app/runtime.py::assert_runtime`). Don't relax that check.
+- A CPython 3.15.2 / 3.15.2t lane (images `python-fastapi-ft315` / `python-fastapi-gil315`) runs the same app code from its own lock in `services/python-fastapi/py315/` and its own manylinux digest (`[python315]` in `versions.lock.toml`). Each image bakes `PY_VERSION_EXPECTED` + `PY_GIL_DISABLED_EXPECTED`, and `assert_runtime` checks both. 3.15 is container-only: check it with `just python315-check` (pytest + ty in Docker).
 - Rust uses edition 2024, `rust-version = "1.95.0"`, exact-version `=` constraints in `Cargo.toml`.
 - Cargo workspace lives at the repo root and contains `loadgen/rust`, `services/rust-axum`, and `services/inference-server`.
 
