@@ -16,7 +16,7 @@ use std::{
 use anyhow::Context;
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
-use hdrhistogram::Histogram;
+use hdrhistogram::{Counter, Histogram};
 use serde::Serialize;
 use stt_loadgen::{
     protocol::{
@@ -468,6 +468,14 @@ struct Output {
     newest_frame_to_partial_latency: Percentiles,
     oldest_frame_to_partial_latency: Percentiles,
     flush_lateness: Percentiles,
+    /// How late the loadgen itself ran each measured frame send: time from
+    /// when the send became due (its tick elapsed and the previous write
+    /// finished) until the session task actually ran. Gateway back-pressure
+    /// is excluded; a busy loadgen (receive path, starved workers) is not.
+    /// Includes the tokio timer's ~1 ms granularity. Large values mean the
+    /// harness, not the gateway, delayed timestamps and the point is invalid.
+    harness_lag: Percentiles,
+    harness_lag_samples: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -517,6 +525,7 @@ async fn main() -> anyhow::Result<()> {
             + Duration::from_secs(args.measure_secs)
             + Duration::from_secs(args.session_grace_secs),
     };
+    let harness_lag = Arc::new(Mutex::new(lag_histogram()?));
     let (sample_tx, mut sample_rx) = mpsc::channel::<Sample>(8192);
     let run_start = Instant::now();
     let measure_start = run_start + pre_measure_delay;
@@ -531,6 +540,8 @@ async fn main() -> anyhow::Result<()> {
         let session_correctness = Arc::clone(&correctness);
         let verify_tx = verifier.sender();
         let url = args.url.clone();
+        let lag_total = Arc::clone(&harness_lag);
+        let mut lag = lag_histogram()?;
         let session_start_at = run_start
             + session_start_delay(session_id, args.sessions, ramp_up, session_start_spread);
         tokio::spawn(async move {
@@ -549,10 +560,16 @@ async fn main() -> anyhow::Result<()> {
                     inference_err_details,
                     session_correctness,
                     verify_tx,
+                    &mut lag,
                 ),
             )
             .await
             .map_err(|_elapsed| ());
+            lag_total
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .add(&lag)
+                .ok();
             record_session_outcome(session_id, outcome, &errors, &counters);
         });
     }
@@ -595,6 +612,10 @@ async fn main() -> anyhow::Result<()> {
     // Every session task has exited (sample_rx closed), so their verifier
     // senders are gone; drain the queue before reading correctness counters.
     verifier.finish()?;
+    let harness_lag = harness_lag
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
 
     let inference_error_snapshot = inference_error_details
         .lock()
@@ -629,6 +650,8 @@ async fn main() -> anyhow::Result<()> {
         newest_frame_to_partial_latency: percentiles(&newest_hist),
         oldest_frame_to_partial_latency: percentiles(&oldest_hist),
         flush_lateness: percentiles(&flush_hist),
+        harness_lag: percentiles(&harness_lag),
+        harness_lag_samples: harness_lag.len(),
     };
 
     println!("{}", serde_json::to_string_pretty(&output)?);
@@ -649,6 +672,7 @@ async fn run_session(
     inference_error_details: Arc<Mutex<InferenceErrorDetails>>,
     correctness: Arc<Correctness>,
     verify_tx: SyncSender<VerifyJob>,
+    lag: &mut Histogram<u32>,
 ) -> anyhow::Result<()> {
     sleep_until(session_start_at).await;
     let mut check = SessionCheck::default();
@@ -683,9 +707,13 @@ async fn run_session(
     let mut sent_times = Vec::<Instant>::new();
     let mut seq = 0_u64;
     let mut next_tick = Instant::now();
+    let mut last_send_done = next_tick;
     while Instant::now() < end_at {
         tokio::select! {
             () = sleep_until(next_tick), if Instant::now() < end_at => {
+                if next_tick >= measure_start {
+                    lag.saturating_record(harness_lag_us(Instant::now(), next_tick, last_send_done));
+                }
                 seq += 1;
                 // Latency is measured from the *scheduled* send time, not the
                 // actual one: if this task wakes late (busy loadgen host), that
@@ -707,6 +735,7 @@ async fn run_session(
                     "send pcm frame",
                 )
                 .await?;
+                last_send_done = Instant::now();
                 next_tick += FRAME_INTERVAL;
             }
             message = read.next() => {
@@ -1018,7 +1047,21 @@ where
     }
 }
 
-fn percentiles(histogram: &Histogram<u64>) -> Percentiles {
+/// Per-session harness-lag histogram (µs, 2 significant figures, ~9 KB),
+/// merged into the run total when the session ends.
+fn lag_histogram() -> anyhow::Result<Histogram<u32>> {
+    Histogram::new_with_bounds(1, 10_000_000, 2).context("harness lag histogram")
+}
+
+/// Harness lag of one send: how long after it became due -- its tick elapsed
+/// *and* the previous write returned -- the session task got to run. Waiting
+/// on a slow previous write is gateway back-pressure, not harness lag.
+fn harness_lag_us(woke: Instant, due: Instant, last_send_done: Instant) -> u64 {
+    woke.saturating_duration_since(due.max(last_send_done))
+        .as_micros() as u64
+}
+
+fn percentiles<T: Counter>(histogram: &Histogram<T>) -> Percentiles {
     let micros_to_ms = |micros: u64| micros as f64 / 1000.0;
     if histogram.is_empty() {
         return Percentiles {
@@ -1479,6 +1522,20 @@ mod tests {
                 h.correctness.verify_dropped.load(Ordering::Relaxed)
             );
         }
+    }
+
+    #[test]
+    fn harness_lag_excludes_gateway_back_pressure() {
+        let due = Instant::now();
+        let ms = Duration::from_millis;
+        // On time, and a task that woke 3 ms after its tick.
+        assert_eq!(harness_lag_us(due, due, due - ms(20)), 0);
+        assert_eq!(harness_lag_us(due + ms(3), due, due - ms(20)), 3_000);
+        // The previous write blocked 7 ms past the tick (gateway not reading):
+        // only the 2 ms after it returned is the harness's.
+        assert_eq!(harness_lag_us(due + ms(9), due, due + ms(7)), 2_000);
+        // Woke before the write returned (cannot happen, but never negative).
+        assert_eq!(harness_lag_us(due + ms(1), due, due + ms(7)), 0);
     }
 
     #[test]
