@@ -10,13 +10,31 @@ x-loadgen-limits: &loadgen-limits
   cpus: 4.0
   mem_limit: 4g
 
+# CPython 3.15.2t (free-threading) build, as image python-fastapi-ft315.
 x-python-build: &python-build
   context: .
   dockerfile: docker/python-fastapi.Dockerfile
   args:
-    PYTHON_FT_IMAGE: "quay.io/pypa/manylinux_2_28_aarch64@sha256:c269bed3fc0ba21aac08ff67bf1d657d4967a9c0582fc8880a0e302f8ca78bdd"
+    PYTHON_FT_IMAGE: "quay.io/pypa/manylinux_2_28_aarch64@sha256:54b271d9562a3686298880df05367909e949ed317e7b1b79b59c696d75f78676"
     UV_IMAGE: "ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a"
     UV_VERSION: "0.11.7"
+    PY_DIR: "cp315-cp315t"
+    PY_EXE: "python3.15t"
+    PY_VERSION_EXPECTED: "3.15.2"
+
+# CPython 3.15.2 (GIL) build of the same code, as image python-fastapi-gil315.
+x-python-gil-build: &python-gil-build
+  context: .
+  dockerfile: docker/python-fastapi.Dockerfile
+  args:
+    PYTHON_FT_IMAGE: "quay.io/pypa/manylinux_2_28_aarch64@sha256:54b271d9562a3686298880df05367909e949ed317e7b1b79b59c696d75f78676"
+    UV_IMAGE: "ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a"
+    UV_VERSION: "0.11.7"
+    PY_VARIANT: "gil"
+    PY_DIR: "cp315-cp315"
+    PY_EXE: "python3.15"
+    PY_GIL_DISABLED_EXPECTED: "0"
+    PY_VERSION_EXPECTED: "3.15.2"
 
 x-typescript-build: &typescript-build
   context: .
@@ -56,10 +74,10 @@ x-ocaml-build: &ocaml-build
   # Self-contained: builds the OxCaml switch + deps from source (~20-30
   # min cold). Local iteration uses the opam switch directly, not this.
   args:
-    OPAM_BASE_IMAGE: "ocaml/opam:debian-12-ocaml-5.2"
-    DEBIAN_RUNTIME_IMAGE: "debian:12-slim"
+    OPAM_BASE_IMAGE: "ocaml/opam:debian-12-ocaml-5.2@sha256:3a849fd15d393ad25192f508a8a0d5af21d77ff380c15e217c81a14cc1361e78"
+    DEBIAN_RUNTIME_IMAGE: "debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
     OXCAML_SWITCH: "5.2.0+ox"
-    OXCAML_REPO_COMMIT: "main"
+    OXCAML_REPO_COMMIT: "afddc8337950dbc02863fe30ae58735a1cf2719f"
 
 x-ocaml-epoll-build: &ocaml-epoll-build
   context: .
@@ -68,17 +86,17 @@ x-ocaml-epoll-build: &ocaml-epoll-build
   # switch and C epoll stubs hermetically; local macOS builds only run the
   # portable protocol tests.
   args:
-    OPAM_BASE_IMAGE: "ocaml/opam:debian-12-ocaml-5.2"
-    DEBIAN_RUNTIME_IMAGE: "debian:12-slim"
+    OPAM_BASE_IMAGE: "ocaml/opam:debian-12-ocaml-5.2@sha256:3a849fd15d393ad25192f508a8a0d5af21d77ff380c15e217c81a14cc1361e78"
+    DEBIAN_RUNTIME_IMAGE: "debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
     OXCAML_SWITCH: "5.2.0+ox"
-    OXCAML_REPO_COMMIT: "main"
+    OXCAML_REPO_COMMIT: "afddc8337950dbc02863fe30ae58735a1cf2719f"
 
 x-ocaml-websocket-build: &ocaml-websocket-build
   context: .
   dockerfile: docker/ocaml-websocket-async.Dockerfile
   args:
-    OPAM_BASE_IMAGE: "ocaml/opam:debian-12-ocaml-5.4"
-    DEBIAN_RUNTIME_IMAGE: "debian:12-slim"
+    OPAM_BASE_IMAGE: "ocaml/opam:debian-12-ocaml-5.4@sha256:32b5cf76c63c12391c01c177a03a3ea8dbc1b53272e64da36e8493d7a09d7530"
+    DEBIAN_RUNTIME_IMAGE: "debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
 
 # FLUSH_INTERVAL_MS: gateway-to-inference batch cadence. Clients still upload
 # 20 ms PCM frames immediately, but gateways flush larger per-session batches
@@ -101,7 +119,7 @@ x-python-env: &python-env
 x-elixir-env: &elixir-env
   CPU_PASSES: "4"
   MODEL_DELAY_MS: "75"
-  FINCH_POOL_COUNT: "50"
+  FINCH_POOL_COUNT: "512"
   FLUSH_INTERVAL_MS: "1000"
   FLUSH_PHASE_JITTER_MS: "1000"
   PORT: "4000"
@@ -154,7 +172,7 @@ x-java-env: &java-env
   # Benchmark JVM flags; no pin diagnostics. `-Djdk.tracePinnedThreads` was
   # removed in JDK 24; to investigate pinning in dev, add JFR's
   # jdk.VirtualThreadPinned event (recipe in docker/java-helidon-nima.Dockerfile).
-  JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
+  JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch -XX:MaxDirectMemorySize=128m -XX:+ExitOnOutOfMemoryError"
 
 x-scala-env: &scala-env
   CPU_PASSES: "4"
@@ -277,32 +295,23 @@ services:
     ports:
       - "8001:8000"
 
-  # GIL-enabled (regular 3.14, NOT 3.14t) variant of stock-single, for
+  # GIL-enabled (3.15.2, NOT 3.15.2t) variant of stock-single, for
   # quantifying free-threading's overhead on a single-loop / single-vCPU
-  # workload. Uses the same Dockerfile via PY_VARIANT=gil build args.
+  # workload. Same Dockerfile via the PY_VARIANT=gil build args.
   # Investigation: results/python-bottleneck-investigation/NOTES.md.
   python-fastapi-stock-gil-single:
     <<: *app-single
     profiles: ["single"]
-    build:
-      context: .
-      dockerfile: docker/python-fastapi.Dockerfile
-      args:
-        PYTHON_FT_IMAGE: "quay.io/pypa/manylinux_2_28_aarch64@sha256:c269bed3fc0ba21aac08ff67bf1d657d4967a9c0582fc8880a0e302f8ca78bdd"
-        UV_IMAGE: "ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a"
-        UV_VERSION: "0.11.7"
-        PY_VARIANT: "gil"
-        PY_DIR: "cp314-cp314"
-        PY_EXE: "python3.14"
-        PY_GIL_DISABLED_EXPECTED: "0"
+    build: *python-gil-build
     depends_on: *needs-inference
     environment:
       <<: *python-env
       WORKER_THREADS: "1"
       PY_VARIANT: "gil"
-      # Phase J finding: uvloop lifts the strict-zero ceiling from ~475 to
-      # ~600 sessions on this 1-vCPU shape. --task-impl rust regressed,
-      # --runtime-threads 2 regressed (1-vCPU oversubscription).
+      # Phase J finding (measured before the move to 3.15): uvloop lifted the
+      # strict-zero ceiling from ~475 to ~600 sessions on this 1-vCPU shape;
+      # --task-impl rust and --runtime-threads 2 regressed (1-vCPU
+      # oversubscription).
       # Pass-through env vars allow further per-experiment overrides.
       GRANIAN_LOOP_KIND: "${GRANIAN_LOOP_KIND:-uvloop}"
       GRANIAN_TASK_IMPL: "${GRANIAN_TASK_IMPL:-asyncio}"
@@ -313,17 +322,7 @@ services:
   python-fastapi-stock-gil-multi:
     <<: *app-multi
     profiles: ["multi"]
-    build:
-      context: .
-      dockerfile: docker/python-fastapi.Dockerfile
-      args:
-        PYTHON_FT_IMAGE: "quay.io/pypa/manylinux_2_28_aarch64@sha256:c269bed3fc0ba21aac08ff67bf1d657d4967a9c0582fc8880a0e302f8ca78bdd"
-        UV_IMAGE: "ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a"
-        UV_VERSION: "0.11.7"
-        PY_VARIANT: "gil"
-        PY_DIR: "cp314-cp314"
-        PY_EXE: "python3.14"
-        PY_GIL_DISABLED_EXPECTED: "0"
+    build: *python-gil-build
     depends_on: *needs-inference
     environment:
       <<: *python-env

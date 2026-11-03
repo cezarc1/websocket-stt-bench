@@ -14,12 +14,36 @@
 //!   error frames must tile the frame sequence: `oldest == prev_newest + 1`.
 //!   Error frames consume their range (gateways drain the batch and do not
 //!   retry it), so they advance the tracker like a partial does.
+//! - [`check_tail`]: continuity only fires on the *next* response, so a
+//!   session whose last response(s) never arrive would pass. At session end
+//!   the highest reported frame must be within [`TAIL_TOLERANCE_FRAMES`] of
+//!   the last frame sent.
 
-use std::fmt;
+use std::{fmt, time::Duration};
 
 use stt_stub::{StubResult, compute_stub};
 
-use crate::protocol::{FRAME_BYTES, PartialMessage, frame_payload};
+use crate::protocol::{FLUSH_INTERVAL, FRAME_BYTES, FRAME_INTERVAL, PartialMessage, frame_payload};
+
+/// Gateway default `INFERENCE_TIMEOUT_MS` (every gateway uses 2000 ms; the
+/// charts and compose files do not override it). Bounds how long one
+/// in-flight inference request can hold a session's next flush back.
+pub const GATEWAY_INFERENCE_TIMEOUT: Duration = Duration::from_millis(2_000);
+
+/// Audio a *correct* gateway may legitimately still owe when the client
+/// closes (gateways need not drain on close). With flush interval `F` and
+/// inference timeout `T`, the last delivered response for batch `k` (flushed
+/// at `t_k`) arrived by `t_k + T`; the next tick fires within `F` of that;
+/// its response takes up to `T`. So at close, frames sent after
+/// `t_k` -- at most `F + 2T` of audio -- may be unreported. One more `F`
+/// absorbs flush-tick lateness on a saturated gateway and client/network lag.
+pub const TAIL_TOLERANCE: Duration = Duration::from_millis(
+    2 * FLUSH_INTERVAL.as_millis() as u64 + 2 * GATEWAY_INFERENCE_TIMEOUT.as_millis() as u64,
+);
+
+/// [`TAIL_TOLERANCE`] in frames (300 at 20 ms frames).
+pub const TAIL_TOLERANCE_FRAMES: u64 =
+    (TAIL_TOLERANCE.as_millis() / FRAME_INTERVAL.as_millis()) as u64;
 
 /// Absolute-or-relative tolerance for `rms` (an `f64` that crosses a JSON
 /// round-trip in every gateway runtime).
@@ -60,6 +84,9 @@ pub enum MismatchKind {
     UnsentFrame,
     /// Range is larger than [`MAX_VERIFY_FRAMES`]; values were not recomputed.
     RangeTooLarge,
+    /// At session end, more than [`TAIL_TOLERANCE_FRAMES`] sent frames were
+    /// never covered by any partial or error frame.
+    MissingTail,
     Frames,
     AudioBytes,
     CpuPasses,
@@ -79,6 +106,7 @@ impl MismatchKind {
             Self::InvalidRange => "invalid_range",
             Self::UnsentFrame => "unsent_frame",
             Self::RangeTooLarge => "range_too_large",
+            Self::MissingTail => "missing_tail",
             Self::Frames => "frames",
             Self::AudioBytes => "audio_bytes",
             Self::CpuPasses => "cpu_passes",
@@ -290,6 +318,23 @@ impl Continuity {
         self.last_newest = self.last_newest.max(newest);
         mismatch
     }
+}
+
+/// End-of-session check: `frames_sent` frames went out and responses covered
+/// `..=last_reported`. Flags a tail longer than [`TAIL_TOLERANCE_FRAMES`]
+/// that no partial or error frame ever reported.
+pub fn check_tail(frames_sent: u64, last_reported: u64) -> Option<Mismatch> {
+    let unreported = frames_sent.saturating_sub(last_reported);
+    (unreported > TAIL_TOLERANCE_FRAMES).then(|| {
+        Mismatch::new(
+            MismatchKind::MissingTail,
+            format!(
+                "frames {}..={frames_sent} never reported ({unreported} frames; \
+                 tolerance {TAIL_TOLERANCE_FRAMES})",
+                last_reported + 1
+            ),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -561,6 +606,41 @@ mod tests {
         );
         assert_eq!(c.last_newest(), 200);
         assert_eq!(c.observe(201, 250), None);
+    }
+
+    #[test]
+    fn tail_tolerance_covers_flush_plus_two_inference_timeouts() {
+        assert_eq!(TAIL_TOLERANCE, Duration::from_secs(6));
+        assert_eq!(TAIL_TOLERANCE_FRAMES, 300);
+        // Worst case for a correct gateway (F + 2T) fits with slack.
+        let worst = FLUSH_INTERVAL + 2 * GATEWAY_INFERENCE_TIMEOUT;
+        assert!(worst < TAIL_TOLERANCE);
+    }
+
+    #[test]
+    fn tail_within_tolerance_passes() {
+        // Nothing sent, nothing reported.
+        assert_eq!(check_tail(0, 0), None);
+        // Typical close: the last ~1-2 flushes still buffered or in flight.
+        assert_eq!(check_tail(750, 650), None);
+        // Exactly at the bound.
+        assert_eq!(check_tail(750, 750 - TAIL_TOLERANCE_FRAMES), None);
+        // Short session that never got a response inside the tolerance.
+        assert_eq!(check_tail(TAIL_TOLERANCE_FRAMES, 0), None);
+        // Reported beyond sent is `unsent_frame`'s job, not this check's.
+        assert_eq!(check_tail(100, 150), None);
+    }
+
+    #[test]
+    fn tail_drop_beyond_tolerance_is_detected() {
+        let m = check_tail(750, 750 - TAIL_TOLERANCE_FRAMES - 1).expect("missing tail");
+        assert_eq!(m.kind, MismatchKind::MissingTail);
+        assert!(m.detail.contains("frames 450..=750"), "{}", m.detail);
+        // Gateway that never answered at all.
+        assert_eq!(
+            check_tail(750, 0).map(|m| m.kind),
+            Some(MismatchKind::MissingTail)
+        );
     }
 
     /// Microbench for loadgen overhead: `cargo test --release -p stt-loadgen

@@ -56,13 +56,17 @@ class SttSession:
     )
     inflight: asyncio.Task[None] | None = field(default=None, init=False)
     seq: int = field(default=0, init=False)
+    sending: bool = field(default=False, init=False)
+    closing: bool = field(default=False, init=False)
 
     async def run(self) -> None:
         async with asyncio.TaskGroup() as tg:
             flusher = tg.create_task(self._flush_loop())
             writer = tg.create_task(self._writer_loop())
             try:
-                while True:
+                # Exits on disconnect/protocol error, or once the writer saw the peer
+                # vanish (checked between receives so none is cancelled mid-flight).
+                while not self.closing:
                     message = await self.websocket.receive()
                     # Granian omits the "bytes" key on text frames, so
                     # iter_bytes() would raise KeyError and close with no code.
@@ -79,7 +83,23 @@ class SttSession:
                         Frame(seq=self.seq, payload=payload, received_at=time.perf_counter())
                     )
             finally:
+                self.closing = True
                 flusher.cancel()
+                # Never let the handler return while Granian still runs a receive/send
+                # for this socket. Granian holds the transport's tokio mutex across the
+                # network await. Through 2.7.7 its handler-exit watcher (done()/err()) took
+                # that mutex with blocking_lock() on the event-loop thread, so a
+                # cancelled-but-still-running send (peer not reading) froze the whole
+                # worker: 0% CPU, /health dead, until the pod was killed. Since 2.7.8
+                # teardown uses try_lock() (2.8.7: ASGIWebsocketProtocol::tx), so it no
+                # longer freezes, but a miss detaches the transport without its writer
+                # half: the close frame is skipped and the send keeps running orphaned.
+                # So, still: finish the current send (the writer exits after it, because
+                # `closing` is set), then cancel the writer while it is parked on the
+                # outbox, which touches no transport. No timeout on purpose: a dead peer
+                # fails the send at once.
+                if self.sending:
+                    await asyncio.wait((writer,))
                 writer.cancel()
                 if self.inflight is not None and self.inflight.cancel():
                     try:
@@ -100,14 +120,9 @@ class SttSession:
             await asyncio.sleep(max(0.0, next_due - time.perf_counter()))
             flush_lateness_ms = max(0.0, (time.perf_counter() - next_due) * 1000)
             next_due += flush_interval_s
-            if (
-                has_inflight := self.inflight is not None and not self.inflight.done()
-            ) or not self.buffer:
-                logger.warning(
-                    "flush loop skipped: inflight=%s buffer=len(%s)",
-                    has_inflight,
-                    len(self.buffer),
-                )
+            if (self.inflight is not None and not self.inflight.done()) or not self.buffer:
+                # Expected once per tick per backlogged session under overload; logging
+                # it (stderr, on the event loop) only adds load when there is none to spare.
                 continue
 
             ctx = BatchContext(
@@ -123,9 +138,21 @@ class SttSession:
         # Decouples websocket writes from the inflight slot so the slot's lifetime
         # tracks inference, not send_text under loop saturation. Mirrors the Rust
         # gateway's mpsc writer in services/rust-axum/src/session.rs.
-        while True:
+        while not self.closing:
             text = await self.outbox.get()
-            await self.websocket.send_text(text)
+            self.sending = True
+            try:
+                await self.websocket.send_text(text)
+            except Exception:
+                # Peer is gone, or the receive loop already closed the socket (Starlette
+                # raises RuntimeError on send after close; Granian >= 2.8.4 itself no
+                # longer raises on a closed transport). End the session, but don't fail
+                # the TaskGroup: that would cancel the pending receive() mid-flight (same
+                # Granian hazard as above); the receive loop sees `closing` and returns.
+                self.closing = True
+                return
+            finally:
+                self.sending = False
 
     async def _process_batch(self, ctx: BatchContext) -> None:
         try:

@@ -13,9 +13,13 @@ public final class Protocol {
 
     public static final int CLOSE_PROTOCOL_ERROR = 1002;
     public static final int CLOSE_UNSUPPORTED_DATA = 1003;
+    /** RFC 6455 "Try Again Later": the gateway is overloaded and shed this session. */
+    public static final int CLOSE_TRY_AGAIN_LATER = 1013;
+
     public static final String REASON_NEED_START = "first message must be start";
     public static final String REASON_TEXT_AFTER_START = "expected binary PCM frames after start";
     public static final String REASON_BAD_FRAME_SIZE = "expected 640 byte PCM frame";
+    public static final String REASON_BACKLOG = "gateway overloaded: unflushed audio backlog exceeded";
 
     /**
      * Shared {@link ObjectMapper}. Strict on unknown fields. Null inclusion is Jackson's default

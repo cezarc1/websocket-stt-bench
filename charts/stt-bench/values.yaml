@@ -13,6 +13,10 @@ images:
   tag: main
   pullPolicy: Always
 
+# Host CPU list every gateway pod is pinned to (cpu-pin sidecar, taskset);
+# a gateway's own cpuAffinity overrides it. Empty = unpinned.
+gatewayCpuAffinity: ""
+
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65532
@@ -51,6 +55,8 @@ inference:
   strategy: {}
   image: inference-server
   replicas: 1
+  # Host CPU list to pin the server to with taskset (e.g. "12-15"). Empty = unpinned.
+  cpuAffinity: ""
   port: 9000
   env:
     WORKER_THREADS: "6"
@@ -98,10 +104,10 @@ gateways:
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   goNethttp:
     enabled: true
     name: stt-go-nethttp-gateway
@@ -114,10 +120,10 @@ gateways:
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   goNethttp2cpu:
     enabled: true
     name: stt-go-nethttp-2vcpu-gateway
@@ -130,10 +136,10 @@ gateways:
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   elixir:
     enabled: true
     name: stt-elixir-phoenix-gateway
@@ -142,18 +148,20 @@ gateways:
     port: 4000
     env:
       WORKER_THREADS: "2"
-      FINCH_POOL_COUNT: "50"
+      FINCH_POOL_COUNT: "512"
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
-  pythonFt:
+        memory: 4Gi
+  # CPython 3.15.2t (free-threading, 2 vCPU mt) and 3.15.2 (GIL, 1 vCPU st)
+  # builds of the same gateway code.
+  pythonFt315:
     enabled: true
-    name: stt-python-fastapi-ft-gateway
-    image: python-fastapi-ft
+    name: stt-python-fastapi-ft315-gateway
+    image: python-fastapi-ft315
     replicas: 0
     port: 8000
     env:
@@ -162,14 +170,14 @@ gateways:
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
-  pythonGil:
+        memory: 4Gi
+  pythonGil315:
     enabled: true
-    name: stt-python-fastapi-gil-gateway
-    image: python-fastapi-gil
+    name: stt-python-fastapi-gil315-gateway
+    image: python-fastapi-gil315
     replicas: 0
     port: 8000
     env:
@@ -181,10 +189,10 @@ gateways:
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   typescriptBun:
     enabled: true
     name: stt-typescript-bun-gateway
@@ -196,10 +204,10 @@ gateways:
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   javaHelidonNima:
     enabled: true
     name: stt-java-helidon-nima-gateway
@@ -213,14 +221,14 @@ gateways:
       # JEP 491 (JDK 24) removes synchronized-induced pinning. For dev pin
       # investigation use JFR's jdk.VirtualThreadPinned event (recipe in
       # docker/java-helidon-nima.Dockerfile); -Djdk.tracePinnedThreads is gone.
-      JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
+      JAVA_OPTS: "-XX:+UseZGC -Xms3g -Xmx3g -XX:+AlwaysPreTouch -XX:MaxDirectMemorySize=128m -XX:+ExitOnOutOfMemoryError"
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   javaHelidonNima2cpu:
     enabled: true
     name: stt-java-helidon-nima-2vcpu-gateway
@@ -230,14 +238,14 @@ gateways:
     env:
       WORKER_THREADS: "2"
       INFERENCE_HTTP_CLIENTS: "4"
-      JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
+      JAVA_OPTS: "-XX:+UseZGC -Xms3g -Xmx3g -XX:+AlwaysPreTouch -XX:MaxDirectMemorySize=128m -XX:+ExitOnOutOfMemoryError"
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   scalaPekko:
     enabled: true
     name: stt-scala-pekko-gateway
@@ -247,14 +255,14 @@ gateways:
     env:
       WORKER_THREADS: "1"
       INFERENCE_HTTP_CLIENTS: "4"
-      JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
+      JAVA_OPTS: "-XX:+UseZGC -Xms3g -Xmx3g -XX:+AlwaysPreTouch"
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   scalaPekko2cpu:
     enabled: true
     name: stt-scala-pekko-2vcpu-gateway
@@ -264,14 +272,14 @@ gateways:
     env:
       WORKER_THREADS: "2"
       INFERENCE_HTTP_CLIENTS: "4"
-      JAVA_OPTS: "-XX:+UseZGC -Xms1536m -Xmx1536m -XX:+AlwaysPreTouch"
+      JAVA_OPTS: "-XX:+UseZGC -Xms3g -Xmx3g -XX:+AlwaysPreTouch"
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   cpp23UWebsockets:
     enabled: true
     name: stt-cpp23-uwebsockets-gateway
@@ -284,10 +292,10 @@ gateways:
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   cpp23UWebsockets2cpu:
     enabled: true
     name: stt-cpp23-uwebsockets-2vcpu-gateway
@@ -300,10 +308,10 @@ gateways:
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   ocamlOxcaml:
     enabled: true
     name: stt-ocaml-oxcaml-gateway
@@ -316,10 +324,10 @@ gateways:
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   ocamlOxcamlEpoll:
     enabled: true
     name: stt-ocaml-oxcaml-epoll-gateway
@@ -332,10 +340,10 @@ gateways:
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   ocamlOxcaml2cpu:
     enabled: true
     name: stt-ocaml-oxcaml-2vcpu-gateway
@@ -348,10 +356,10 @@ gateways:
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   rustSync:
     enabled: true
     name: stt-rust-sync-gateway
@@ -363,10 +371,10 @@ gateways:
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   rustSync2cpu:
     enabled: true
     name: stt-rust-sync-2vcpu-gateway
@@ -378,10 +386,10 @@ gateways:
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
   ocamlWebsocketAsync:
     enabled: true
     name: stt-ocaml-websocket-async-gateway
@@ -394,10 +402,10 @@ gateways:
     resources:
       requests:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "1"
-        memory: 2Gi
+        memory: 4Gi
   ocamlWebsocketAsync2cpu:
     enabled: true
     name: stt-ocaml-websocket-async-2vcpu-gateway
@@ -410,10 +418,10 @@ gateways:
     resources:
       requests:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
       limits:
         cpu: "2"
-        memory: 2Gi
+        memory: 4Gi
 
 loadgen:
   enabled: true
@@ -446,17 +454,17 @@ loadgen:
       sessions: 1250
       outputPrefix: elixir-phoenix-1vcpu-1250
       suspend: true
-    - name: python-ft-180
-      gateway: pythonFt
-      serviceName: python-fastapi-ft-1vcpu-k8s
-      sessions: 180
-      outputPrefix: python-fastapi-ft-1vcpu-180
+    - name: python-ft315-1000
+      gateway: pythonFt315
+      serviceName: python-fastapi-ft315-1vcpu-k8s
+      sessions: 1000
+      outputPrefix: python-fastapi-ft315-1vcpu-1000
       suspend: true
-    - name: python-gil-1100
-      gateway: pythonGil
-      serviceName: python-fastapi-gil-1vcpu-k8s
-      sessions: 1100
-      outputPrefix: python-fastapi-gil-1vcpu-1100
+    - name: python-gil315-1000
+      gateway: pythonGil315
+      serviceName: python-fastapi-gil315-1vcpu-k8s
+      sessions: 1000
+      outputPrefix: python-fastapi-gil315-1vcpu-1000
       suspend: true
     - name: typescript-bun-2500
       gateway: typescriptBun

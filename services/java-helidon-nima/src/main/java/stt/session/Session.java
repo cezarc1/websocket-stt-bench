@@ -59,6 +59,17 @@ public final class Session implements WsListener {
     private static final int TYPICAL_BATCH = 50;
     /** Upper bound on a reassembled (fragmented) start message; anything longer is not a start. */
     static final int MAX_START_CHARS = 1024;
+    /// Per-session cap on buffered, not-yet-flushed frames, derived from the timeouts exactly like
+    /// the Bun and Elixir gateways: frames only pile up while a flush waits, at most
+    /// max(interval + phase jitter, inference timeout + interval) = max(1 s + 1 s, 2 s + 1 s) = 3 s
+    /// = 150 frames at the defaults; the cap is twice that (300 frames, 6 s) so a scheduler stall of
+    /// another full wait still passes (healthy sessions were observed at up to ~190 frames under
+    /// timer lag). A session that passes the SLO holds ~50-75, so this only trips far past it. Without
+    /// it, overload grows every session's backlog without bound until the heap is exhausted and
+    /// OutOfMemoryError kills arbitrary threads (flush vthreads -> silently stalled sessions; the
+    /// listener -> the JVM's last non-daemon thread is gone and it exits 0). The session is closed
+    /// with 1013 instead: frames are never dropped silently.
+    static final int MAX_BACKLOG_FRAMES = 300;
     /** Bounded wait for [#sendLock] on the receive thread before interrupting a wedged writer. */
     static final long SEND_LOCK_WAIT_MS = 1000;
 
@@ -164,7 +175,7 @@ public final class Session implements WsListener {
                 }
                 var copy = new byte[Protocol.FRAME_BYTES];
                 frame.read(copy);
-                append(copy);
+                append(session, copy);
                 return;
             }
             pending = new byte[Protocol.FRAME_BYTES];
@@ -186,15 +197,23 @@ public final class Session implements WsListener {
             closeWith(session, Protocol.CLOSE_UNSUPPORTED_DATA, Protocol.REASON_BAD_FRAME_SIZE);
             return;
         }
-        append(pending);
+        append(session, pending);
     }
 
     /** Takes ownership of {@code payload}: it must be a fresh copy, never Helidon's buffer. */
-    private void append(byte[] payload) {
+    private void append(WsSession session, byte[] payload) {
         var receivedAtNanos = System.nanoTime();
+        int backlog;
         synchronized (bufferLock) {
-            seq += 1;
-            buffer.add(new Frame(seq, payload, receivedAtNanos));
+            backlog = buffer.size();
+            if (backlog < MAX_BACKLOG_FRAMES) {
+                seq += 1;
+                buffer.add(new Frame(seq, payload, receivedAtNanos));
+            }
+        }
+        if (backlog >= MAX_BACKLOG_FRAMES) {
+            LOG.warning(() -> "closing session: " + backlog + " unflushed frames (cap " + MAX_BACKLOG_FRAMES + ")");
+            closeWith(session, Protocol.CLOSE_TRY_AGAIN_LATER, Protocol.REASON_BACKLOG);
         }
     }
 

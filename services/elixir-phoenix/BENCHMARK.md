@@ -1,5 +1,18 @@
 # Elixir / Phoenix Benchmark Notes
 
+## 2026-11-02/03 homelab runs (co-located, pinned, correctness-verified)
+
+One k3s node (i9-13900F); gateway pinned to P-cores 0,2 with a 1- or 2-vCPU quota and 4 GiB, loadgen on 4-11 (8 Tokio workers), inference on 12-15. Two independent full passes (run3, run4) after in-cluster conformance on the same images, plus targeted re-runs where listed (run5: C++ 2 vCPU; run6: OCaml 2 vCPU; run7: re-measured with the step-down sweep fix); the README reports the lowest confirmed value. "Confirmed" = every repeat passed (≥2/2) and the next step failed. Raw logs: `results/homelab/` (gitignored).
+
+| Pass | vCPU | Confirmed | First solid fail | Borderline | Fail reason at first solid fail | Gateway cores at that fail |
+|---|---:|---:|---:|---|---|---:|
+| run3 | 1 | **1250** | 1300 | — | `newest_p50=237>200;oldest_p50=1218>1200;err_rate=1.38e-04>1e-5` | 1.00 |
+| run4 | 1 | **1250** | 1300 | — | `newest_p50=210>200` | 0.99 |
+| run3 | 2 | **2200** | 2300 | — | `newest_p50=241>200;newest_p95=374>350;oldest_p50=1222>1200;err_rate=3.33e-04>1e-5` | 2.00 |
+| run4 | 2 | **2100** | 2400 | 2300 (1/2 pass) | `newest_p50=288>200;newest_p95=483>350;oldest_p50=1269>1200` | 2.00 |
+| run7a | 2 | **2200** | 2300 | — | `newest_p50=259>200;newest_p95=409>350;oldest_p50=1240>1200` | 2.00 |
+| run7b | 2 | **2200** | 2300 | — | `newest_p50=240>200;newest_p95=366>350;oldest_p50=1221>1200` | 2.00 |
+
 ## 2026-10-28 homelab re-run (split nodes, correctness-verified)
 
 Split nodes: gateway + loadgen on node `cezar-4090`, one 6-CPU inference replica on node `2080` across the LAN; images tagged `gateway-fixes`. Every measured partial was verified client-side (exact stub values + per-session frame continuity) and `correctness_errors` was 0 on every point below. Same harness (`scripts/bench/run_point.sh`: 10 s warmup, 45 s measured, 30 s ramp, 1000 ms spread) and SLO; confirmed = 2/2 passes. Not directly comparable with the earlier single-node sections below, which are kept as history (see the README note).

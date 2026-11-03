@@ -28,8 +28,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Runs in Docker (the pinned CPython 3.15.2t / 3.15.2 are container-only).
           - recipe: python-check
-            python: "3.14.4t"
             lock: services/python-fastapi/uv.lock
             cache: ~/.cache/uv
           - recipe: analysis-check
@@ -76,18 +76,14 @@ jobs:
         with:
           just-version: "1.40.0"
 
-      # The repo pins Python as system-only (no uv downloads); locally it comes
-      # from pyenv. py-sync.sh honours PYTHON_BIN; analysis finds it on PATH.
+      # The analysis tooling pins Python as system-only (no uv downloads);
+      # locally it comes from pyenv, in CI from setup-python on PATH.
       - name: Set up Python
         id: python
         if: matrix.python != ''
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-
-      - name: Point py-sync at the CI interpreter
-        if: matrix.recipe == 'python-check'
-        run: echo "PYTHON_BIN=${{ steps.python.outputs.python-path }}" >> "$GITHUB_ENV"
 
       - name: Install pinned cargo plugins
         if: matrix.recipe == 'rust-check'

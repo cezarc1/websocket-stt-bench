@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     fs::File,
     future::Future,
-    io::{BufWriter, Write},
+    io::{BufWriter, IsTerminal, Write},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -22,7 +22,7 @@ use stt_loadgen::{
     protocol::{
         ErrorMessage, FRAME_INTERVAL, PartialMessage, ServerMessage, StartMessage, frame_payload,
     },
-    verify::{Continuity, ExpectedConfig, Mismatch, MismatchKind, verify_partial},
+    verify::{Continuity, ExpectedConfig, Mismatch, MismatchKind, check_tail, verify_partial},
 };
 use tokio::{
     sync::mpsc,
@@ -450,7 +450,9 @@ struct Output {
     inference_errors: u64,
     inference_error_counts: Vec<InferenceErrorCount>,
     inference_error_samples: Vec<InferenceErrorSample>,
-    /// Measured responses that failed continuity or expected-value checks.
+    /// Measured responses that failed continuity or expected-value checks,
+    /// plus one per session whose unreported tail exceeded the tolerance
+    /// (`missing_tail`).
     correctness_errors: u64,
     correctness_error_counts: Vec<CorrectnessErrorCount>,
     correctness_error_samples: Vec<CorrectnessErrorSample>,
@@ -479,8 +481,12 @@ struct Percentiles {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Logs go to stderr: stdout carries only the summary JSON, which callers
+    // pipe into `eval_slo.py` / `jq` / `tee` (run_point.sh splits the two).
     fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("warn".parse().unwrap()))
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
         .init();
 
     let args = Args::parse();
@@ -681,8 +687,12 @@ async fn run_session(
         tokio::select! {
             () = sleep_until(next_tick), if Instant::now() < end_at => {
                 seq += 1;
-                let now = Instant::now();
-                sent_times.push(now);
+                // Latency is measured from the *scheduled* send time, not the
+                // actual one: if this task wakes late (busy loadgen host), that
+                // lag is real delay the audio would have suffered and must not
+                // be dropped from the measurement (coordinated omission).
+                // Sends stay on the fixed `next_tick` timeline and catch up.
+                sent_times.push(next_tick);
                 let payload = frame_payload(session_id, seq);
                 timed(
                     timeouts.send,
@@ -763,7 +773,30 @@ async fn run_session(
             }
         }
     }
+    check_session_tail(session_id, &sent_times, measure_start, &check, &correctness);
     Ok(())
+}
+
+/// Continuity only fires on the *next* response, so dropped final
+/// partial(s) would go unnoticed. Once the session has stopped receiving,
+/// flag a tail of sent-but-never-reported frames longer than a correct
+/// gateway could owe at close (`verify::TAIL_TOLERANCE_FRAMES`). Only
+/// sessions that sent audio inside the measured window are checked.
+fn check_session_tail(
+    session_id: usize,
+    sent_times: &[Instant],
+    measure_start: Instant,
+    check: &SessionCheck,
+    correctness: &Correctness,
+) {
+    if sent_times.last().is_none_or(|&last| last < measure_start) {
+        return;
+    }
+    let sent = sent_times.len() as u64;
+    let reported = check.continuity.last_newest();
+    if let Some(mismatch) = check_tail(sent, reported) {
+        correctness.record(session_id, "session_end", reported + 1, sent, &[mismatch]);
+    }
 }
 
 fn measure_start_delay(
@@ -956,7 +989,7 @@ fn record_session_outcome(
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
             protocol_errors.fetch_add(1, Ordering::Relaxed);
-            warn!(session_id, %error, "session failed");
+            warn!(session_id, "session failed: {error:#}");
         }
         Err(()) => {
             timeout_counters.increment(TimeoutKind::Session);
@@ -1372,6 +1405,51 @@ mod tests {
         h.finish().await;
         assert_eq!(h.correctness.errors.load(Ordering::Relaxed), 0);
         assert_eq!(h.check.continuity.last_newest(), 150);
+    }
+
+    #[tokio::test]
+    async fn dropped_tail_partials_are_flagged_at_session_end() {
+        // 500 frames sent; partials tile 1..=150, then the gateway goes
+        // silent. 350 unreported frames > 300-frame tolerance.
+        let mut h = Harness::new(3, 1, 500, 64);
+        for i in 0..3 {
+            h.feed(partial_text(3, i * 50 + 1, (i + 1) * 50))
+                .await
+                .expect("process");
+        }
+        let measure_start = h.now - Duration::from_secs(1);
+        check_session_tail(3, &h.sent_times, measure_start, &h.check, &h.correctness);
+        h.finish().await;
+        assert_eq!(h.correctness.errors.load(Ordering::Relaxed), 1);
+        let (counts, details) = h.correctness.snapshot();
+        assert_eq!(counts.len(), 1);
+        assert_eq!(counts[0].kind, "missing_tail");
+        assert_eq!(details[0].message_type, "session_end");
+        assert_eq!(
+            (details[0].oldest_frame_seq, details[0].newest_frame_seq),
+            (151, 500)
+        );
+    }
+
+    #[tokio::test]
+    async fn normal_close_tail_and_unmeasured_sessions_pass() {
+        // Last ~2 flushes unreported at close: legitimate.
+        let mut h = Harness::new(3, 1, 500, 64);
+        for i in 0..8 {
+            h.feed(partial_text(3, i * 50 + 1, (i + 1) * 50))
+                .await
+                .expect("process");
+        }
+        let measure_start = h.now - Duration::from_secs(1);
+        check_session_tail(3, &h.sent_times, measure_start, &h.check, &h.correctness);
+        // A session that sent nothing in the measured window is not checked,
+        // nor is one that sent nothing at all.
+        let silent = SessionCheck::default();
+        let after = h.now + Duration::from_secs(1);
+        check_session_tail(4, &h.sent_times, after, &silent, &h.correctness);
+        check_session_tail(5, &[], measure_start, &silent, &h.correctness);
+        h.finish().await;
+        assert_eq!(h.correctness.errors.load(Ordering::Relaxed), 0);
     }
 
     /// Receive-path cost per measured partial with value verification handed

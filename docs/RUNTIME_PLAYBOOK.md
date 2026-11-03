@@ -61,8 +61,11 @@ guess.
 A capacity number is only comparable if produced identically. Fixed for every
 runtime — do **not** tune per-gateway:
 
-- Pod shape: **1 vCPU / 2 GiB** (and **2 vCPU / 2 GiB**), dedicated inference
-  with structural headroom (co-located inference invalidates the number).
+- Pod shape: **1 vCPU / 4 GiB** (and **2 vCPU / 4 GiB**). Inference must have
+  structural headroom and must not share CPUs with the gateway or loadgen: on
+  the homelab node everything is co-located but pinned to disjoint P-cores
+  (`charts/stt-bench/values-colocated.yaml`; gateway 0,2, loadgen 4-11,
+  inference 12-15). Unpinned co-location invalidates the number.
 - Loadgen: **10 s warmup / 45 s measured / 30 s ramp / 1000 ms session-start
   spread**, 1 repeat per point.
 - SLO gates (in `scripts/bench/eval_slo.py`, identical for all): newest p50 ≤
@@ -178,7 +181,7 @@ Kubernetes cluster + the methodology above; homelab specifics are Appendix A.
 ### Phase 5 — Deploy + smoke (cluster)
 
 1. Deploy via the Helm chart (`charts/stt-bench/`, canonical) or a standalone
-   Deployment+Service; **1 replica, 1 vCPU / 2 GiB**, dedicated inference.
+   Deployment+Service; **1 replica, 1 vCPU / 4 GiB**, inference pinned to its own CPUs.
    Scaling a cluster deployment is an **[ASK]**.
 2. Force the fresh image (`imagePullPolicy: Always` + rollout restart), wait
    Ready, confirm exactly one ready pod and the correct image digest.

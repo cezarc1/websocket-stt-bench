@@ -21,9 +21,6 @@ RUST_EXPECTED="$(version_value tools rust)"
 BUN_EXPECTED="$(version_value tools bun)"
 GO_EXPECTED="$(version_value tools go)"
 MAVEN_EXPECTED="$(version_value tools maven)"
-PY_EXPECTED="$(version_value python version)"
-PYENV_NAME="$(version_value python pyenv)"
-PY_EXE="$(version_value python executable)"
 ELIXIR_EXPECTED="$(version_value elixir version)"
 OTP_EXPECTED="$(version_value elixir otp)"
 JDK_EXPECTED="$(version_value tools java_jdk)"
@@ -38,22 +35,41 @@ expect_version "$("$ROOT/.tools/bin/bun" --version)" "$BUN_EXPECTED" "bun"
 expect_version "$("$ROOT/.tools/bin/go" version | awk '{print $3}' | sed 's/^go//')" "$GO_EXPECTED" "go"
 expect_version "$("$ROOT/.tools/bin/mvn" -version | awk 'NR == 1 {print $3}')" "$MAVEN_EXPECTED" "maven"
 
-PYTHON_BIN="$(PYENV_VERSION="$PYENV_NAME" pyenv which "$PY_EXE")"
-PYENV_VERSION="$PYENV_NAME" "$PYTHON_BIN" - "$PY_EXPECTED" <<'PY'
-import sys
-import sysconfig
-
-expected = tuple(int(part) for part in sys.argv[1].split("."))
-actual = sys.version_info[:3]
-if actual != expected:
-    raise SystemExit(f"python: expected {expected}, got {actual}")
-if sysconfig.get_config_var("Py_GIL_DISABLED") != 1:
-    raise SystemExit("python: expected Py_GIL_DISABLED=1")
-if not hasattr(sys, "_is_gil_enabled"):
-    raise SystemExit("python: expected sys._is_gil_enabled")
-if sys._is_gil_enabled():
-    raise SystemExit("python: expected free-threading GIL disabled")
-PY
+# Python is container-only (the pinned manylinux image provides CPython
+# 3.15.2t / 3.15.2, the image build asserts it, and `just python-check` runs
+# the gate inside it), so doctor checks that its pins agree across
+# versions.lock.toml, the pyproject and the image builds.
+PY_EXPECTED="$(version_value python version)"
+PY_PYPROJECT="$ROOT/$(version_value python pyproject)"
+PY_IMAGE="$(version_value containers.python manylinux_2_28_x86_64)"
+grep -qx "requires-python = \"==$PY_EXPECTED\"" "$PY_PYPROJECT" || {
+  echo "python: $PY_PYPROJECT must declare requires-python = \"==$PY_EXPECTED\"" >&2
+  exit 1
+}
+for dep in aiohttp fastapi granian pydantic wsproto ruff ty; do
+  pin="$(version_value python.dependencies "$dep")"
+  grep -Eq "^ *\"$dep(\[[a-z,]+\])?==$pin\"" "$PY_PYPROJECT" || {
+    echo "python: $PY_PYPROJECT must pin $dep==$pin" >&2
+    exit 1
+  }
+done
+for f in .github/workflows/images.yml scripts/bench/homelab/local-builds.txt; do
+  [ "$(grep -c "$PY_IMAGE" "$ROOT/$f")" -ge 2 ] || {
+    echo "python: $f must build both 3.15 images from $PY_IMAGE" >&2
+    exit 1
+  }
+  [ "$(grep -c "PY_VERSION_EXPECTED=$PY_EXPECTED" "$ROOT/$f")" -ge 2 ] || {
+    echo "python: $f must pass PY_VERSION_EXPECTED=$PY_EXPECTED to both 3.15 images" >&2
+    exit 1
+  }
+done
+PY_IMAGE_ARM="$(version_value containers.python manylinux_2_28_aarch64)"
+for f in docker/python-fastapi.Dockerfile docker-compose.yml; do
+  grep -q "$PY_IMAGE_ARM" "$ROOT/$f" || {
+    echo "python: $f must default to $PY_IMAGE_ARM" >&2
+    exit 1
+  }
+done
 
 ELIXIR_VERSION="$(elixir -e 'IO.write(System.version())')"
 expect_version "$ELIXIR_VERSION" "$ELIXIR_EXPECTED" "elixir"

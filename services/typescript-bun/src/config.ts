@@ -16,12 +16,36 @@ export interface SessionConfig {
   readonly modelDelayMs: number;
   readonly flushIntervalMs: number;
   readonly flushPhaseJitterMs: number;
+  readonly inferenceTimeoutMs: number;
 }
 
 export interface AppConfig extends SessionConfig {
   readonly inferenceUrl: string;
-  readonly inferenceTimeoutMs: number;
   readonly port: number;
+}
+
+const FRAME_MS = 20;
+
+/**
+ * Per-session backlog cap, derived from the timeouts so it can never fire for
+ * a session whose requests finish (even by timing out). Frames only pile up
+ * while a flush waits: before the first flush (one interval plus the phase
+ * jitter), or while the single in-flight request runs, which the inference
+ * timeout bounds, plus up to one interval until the next tick takes them. The
+ * longest healthy wait is therefore max(interval + jitter, timeout + interval)
+ * = 3 s = 150 frames at the defaults; the cap is twice that (300 frames, 6 s,
+ * ~190 KiB) so an event-loop stall of another full wait still passes. Only a
+ * session whose flushes have stalled under sustained overload reaches it; it
+ * is closed with 1013 instead of buffering until the process OOMs. Frames are
+ * never dropped silently: the close tells the client the backlog was
+ * abandoned.
+ */
+export function maxBufferedFrames(config: SessionConfig): number {
+  const longestWaitMs = Math.max(
+    config.flushIntervalMs + config.flushPhaseJitterMs,
+    config.inferenceTimeoutMs + config.flushIntervalMs,
+  );
+  return 2 * Math.ceil(longestWaitMs / FRAME_MS);
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): AppConfig {

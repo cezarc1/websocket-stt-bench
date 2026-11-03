@@ -1,10 +1,10 @@
 #!/bin/sh
 # Granian launcher.
 #
-# Free-threaded Python (3.14t) note: per Granian's docs (>= 2.0), on a
+# Free-threaded Python (3.15.2t) note: per Granian's docs (>= 2.0), on a
 # free-threaded build `--workers N` spawns N worker *threads* (not processes)
 # sharing one Python interpreter, each running its own asyncio event loop.
-# This is the headline 3.14t configuration the benchmark measures.
+# This is the headline free-threaded configuration the benchmark measures.
 #
 # Granian refuses to start if the GIL gets re-enabled on the free-threaded
 # build, so this also acts as a runtime guard.
@@ -15,7 +15,7 @@
 #   mt:     --workers N --runtime-mode mt --runtime-threads N
 #           N Python loops sharing one interpreter without GIL contention,
 #           multi-threaded Rust I/O runtime (mt is Granian's recommendation
-#           for higher CPU counts). Headline 3.14t config.
+#           for higher CPU counts). Headline free-threaded config.
 #
 # GRANIAN_LOOPS = N picks the mt config. Absent => stock baseline.
 # WORKER_THREADS bounds each loop's default ThreadPoolExecutor (see

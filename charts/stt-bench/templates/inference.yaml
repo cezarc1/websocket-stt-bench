@@ -33,6 +33,9 @@ spec:
         - name: inference-server
           image: {{ include "stt-bench.image" (list . .Values.inference.image) }}
           imagePullPolicy: {{ .Values.images.pullPolicy }}
+          {{- with .Values.inference.cpuAffinity }}
+          command: ["taskset", "-c", {{ . | quote }}, "stt-inference-server"]
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.inference.port }}

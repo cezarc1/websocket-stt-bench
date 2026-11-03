@@ -34,6 +34,16 @@ defmodule SttGateway.Inference do
 
   @type result :: {:ok, inference_result()} | {:error, error_payload()}
 
+  @receive_timeout_ms 2_000
+  # The pool arms receive_timeout when it starts the request (pool.ex
+  # stream_request/3), so time the async_request cast spends queued in a
+  # congested pool's mailbox counts only against this backstop.
+  @backstop_timeout_ms 10_000
+
+  @doc "Finch receive_timeout: the bound on one healthy in-flight request."
+  @spec receive_timeout_ms() :: pos_integer()
+  def receive_timeout_ms, do: @receive_timeout_ms
+
   @spec request_async(iodata(), non_neg_integer(), partial_context(), pid(), String.t(), atom()) ::
           :ok
   def request_async(body, cpu_passes, context, caller, inference_url, finch_name) do
@@ -84,13 +94,51 @@ defmodule SttGateway.Inference do
     end
   end
 
+  # Not `Finch.request/3`: Finch 0.21's HTTP/2 pool never replies to that
+  # blocking `:gen_statem.call` (no timeout) when its receive_timeout fires
+  # before the request body is fully sent, i.e. whenever the HTTP/2 flow-
+  # control window is exhausted -- which an overloaded gateway hits, because
+  # its batches grow past the 64 KiB stream window while the CPU-starved pool
+  # processes window updates late. The task then hangs forever: the socket
+  # stays `busy?`, its buffer grows without bound and the task leaks the body,
+  # until the VM is OOM-killed. `async_request` takes the same pool path but
+  # the pool reports the timeout by message, so the task always finishes.
   @spec safe_request(Finch.Request.t(), atom()) ::
           {:ok, Finch.Response.t()} | {:error, Exception.t()} | {:crashed, String.t()}
   defp safe_request(request, finch_name) do
-    Finch.request(request, finch_name, receive_timeout: 2_000, pool_timeout: 1_000)
+    ref = Finch.async_request(request, finch_name, receive_timeout: @receive_timeout_ms)
+    await_response(ref, 0, [])
   catch
     kind, reason ->
       {:crashed, "inference request crashed: " <> Exception.format_banner(kind, reason)}
+  end
+
+  @spec await_response(Finch.request_ref(), non_neg_integer(), iodata()) ::
+          {:ok, Finch.Response.t()} | {:error, Exception.t()}
+  defp await_response(ref, status, body) do
+    receive do
+      {^ref, {:status, status}} -> await_response(ref, status, body)
+      {^ref, {:headers, _headers}} -> await_response(ref, status, body)
+      {^ref, {:data, data}} -> await_response(ref, status, [body | data])
+      {^ref, :done} -> {:ok, %Finch.Response{status: status, body: IO.iodata_to_binary(body)}}
+      {^ref, {:error, error}} -> {:error, error}
+    after
+      # Backstop only (the pool's own receive_timeout normally reports first):
+      # covers a request whose pool died. Cancelling queues behind the request
+      # in the pool's mailbox, so no orphaned request outlives this task.
+      @backstop_timeout_ms ->
+        cancel(ref)
+        {:error, %Mint.TransportError{reason: :timeout}}
+    end
+  end
+
+  # A disconnected pool answers the cancel with an error tuple, which Finch
+  # turns into a MatchError; the request is gone either way.
+  @spec cancel(Finch.request_ref()) :: :ok
+  defp cancel(ref) do
+    Finch.cancel_async_request(ref)
+  catch
+    _kind, _reason -> :ok
   end
 
   @spec decode_body(binary(), integer()) :: result()
@@ -152,6 +200,8 @@ defmodule SttGateway.Inference do
     {kind, message} =
       case error do
         %Mint.TransportError{reason: :timeout} -> {:timeout, "inference request timed out"}
+        # How HTTP/2 pools report receive_timeout expiry.
+        %Finch.Error{reason: :request_timeout} -> {:timeout, "inference request timed out"}
         _ -> {:connection_reset, inspect(error)}
       end
 

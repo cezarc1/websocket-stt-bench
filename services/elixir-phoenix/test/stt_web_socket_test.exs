@@ -44,6 +44,19 @@ defmodule SttGatewayWeb.SttWebSocketTest do
     def call(conn, _opts), do: Plug.Conn.send_resp(conn, 200, "[1, 2]")
   end
 
+  # Never reads the request body, so Bandit never opens the HTTP/2 flow-
+  # control window past its initial 64 KiB: a larger body cannot be fully sent.
+  defmodule HangingInference do
+    @moduledoc false
+    @behaviour Plug
+
+    @impl true
+    def init(opts), do: opts
+
+    @impl true
+    def call(_conn, _opts), do: Process.sleep(:infinity)
+  end
+
   setup do
     server = start_supervised!({Bandit, plug: {FakeInference, self()}, port: 0, ip: :loopback})
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
@@ -178,6 +191,71 @@ defmodule SttGatewayWeb.SttWebSocketTest do
              "newest_frame_seq" => 3,
              "frames" => 3
            } = error
+
+    refute state.busy?
+  end
+
+  test "the backlog cap is twice the longest wait a healthy flush can see" do
+    # (2 s receive_timeout + 1 s until the next tick) = 150 frames, doubled.
+    assert SttWebSocket.max_buffered_frames(1_000, 0, 2_000) == 300
+    # The phase jitter only delays the first flush, when nothing is in flight.
+    assert SttWebSocket.max_buffered_frames(1_000, 1_000, 2_000) == 300
+    assert SttWebSocket.max_buffered_frames(1_000, 5_000, 2_000) == 600
+    assert SttWebSocket.max_buffered_frames(1_000, 0, 5_000) == 600
+  end
+
+  test "a backlog past the cap closes 1013 instead of growing", %{state: state} do
+    assert state.max_buffered_frames == 300
+    state = state |> start!() |> send_frames(1..300)
+    assert state.buffered == 300
+
+    assert {:stop, :normal, {1013, reason}, _} =
+             SttWebSocket.handle_in({frame(301), [opcode: :binary]}, state)
+
+    assert reason =~ "backlog"
+  end
+
+  test "flushing resets the backlog count, so a flushing session never hits the cap",
+       %{state: state} do
+    state =
+      Enum.reduce(1..20, start!(state), fn batch, acc ->
+        acc = acc |> send_frames((batch * 200)..(batch * 200 + 199)) |> flush()
+        assert acc.buffered == 0
+        {partial, acc} = finish(acc)
+        assert partial["type"] == "partial"
+        acc
+      end)
+
+    refute state.busy?
+  end
+
+  # Regression: with Finch.request/3 the task blocked forever in
+  # :gen_statem.call once receive_timeout fired mid-body, so the socket stayed
+  # busy? and its buffer grew until OOM.
+  test "a body larger than the HTTP/2 window still times out and clears busy?",
+       %{state: state} do
+    server =
+      start_supervised!({Bandit, plug: HangingInference, port: 0, ip: :loopback},
+        id: :hanging_inference
+      )
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
+    state = %{state | inference_url: "http://127.0.0.1:#{port}"}
+    # 200 frames = 125 KiB, about twice the 64 KiB initial stream window.
+    state = state |> start!() |> send_frames(1..200) |> flush()
+
+    assert_receive {:compute_finished, _, _} = msg, 3_000
+    {:push, {:text, json}, state} = SttWebSocket.handle_info(msg, state)
+
+    assert %{
+             "type" => "error",
+             "stage" => "inference_request",
+             "kind" => "timeout",
+             "retryable" => true,
+             "oldest_frame_seq" => 1,
+             "newest_frame_seq" => 200,
+             "frames" => 200
+           } = JSON.decode!(json)
 
     refute state.busy?
   end

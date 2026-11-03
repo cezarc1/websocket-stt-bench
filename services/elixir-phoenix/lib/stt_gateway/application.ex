@@ -4,7 +4,10 @@ defmodule SttGateway.Application do
   use Application
 
   @finch_name SttGateway.Finch
-  @default_finch_pool_count 50
+  # One HTTP/2 connection = one Finch pool process. When the run queue is full,
+  # fair scheduling starves each pool process, so its replies sit unread until
+  # request timeouts fire together; keep sessions per connection small (~2-5).
+  @default_finch_pool_count 512
 
   def finch_name, do: @finch_name
 

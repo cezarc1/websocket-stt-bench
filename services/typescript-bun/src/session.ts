@@ -2,16 +2,20 @@ import {
   DEFAULT_CPU_PASSES,
   DEFAULT_FLUSH_INTERVAL_MS,
   DEFAULT_FLUSH_PHASE_JITTER_MS,
+  DEFAULT_INFERENCE_TIMEOUT_MS,
   DEFAULT_MODEL_DELAY_MS,
   PARTIAL_CHANNEL_DEPTH,
   type SessionConfig,
+  maxBufferedFrames,
 } from "./config.ts";
 import { InferenceError, type InferenceRunner } from "./inference.ts";
 import {
   CLOSE_INTERNAL_ERROR,
   CLOSE_PROTOCOL_ERROR,
+  CLOSE_TRY_AGAIN_LATER,
   CLOSE_UNSUPPORTED_DATA,
   FRAME_BYTES,
+  REASON_BACKLOG_EXCEEDED,
   REASON_BAD_FRAME_SIZE,
   REASON_NEED_START,
   REASON_SEND_DROPPED,
@@ -38,12 +42,22 @@ export interface SttSessionOptions extends Partial<SessionConfig> {
 
 type TimerHandle = ReturnType<typeof setTimeout>;
 
+interface Batch {
+  readonly oldestSeq: number;
+  readonly newestSeq: number;
+  readonly frames: number;
+  readonly oldestReceivedAtMs: number;
+  readonly newestReceivedAtMs: number;
+  readonly body: Uint8Array;
+}
+
 export class SttSession {
   private readonly socket: SocketLike;
   private readonly inference: InferenceRunner;
   private readonly config: SessionConfig;
   private readonly outbox: BoundedOutbox;
   private readonly timers: boolean;
+  private readonly maxBufferedFrames: number;
   private readonly buffer: Frame[] = [];
   private seq = 0;
   private started = false;
@@ -61,7 +75,9 @@ export class SttSession {
       modelDelayMs: options.modelDelayMs ?? DEFAULT_MODEL_DELAY_MS,
       flushIntervalMs: Math.max(1, options.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS),
       flushPhaseJitterMs: options.flushPhaseJitterMs ?? DEFAULT_FLUSH_PHASE_JITTER_MS,
+      inferenceTimeoutMs: options.inferenceTimeoutMs ?? DEFAULT_INFERENCE_TIMEOUT_MS,
     };
+    this.maxBufferedFrames = maxBufferedFrames(this.config);
     this.outbox = new BoundedOutbox(socket, PARTIAL_CHANNEL_DEPTH);
     this.timers = options.timers ?? true;
   }
@@ -93,12 +109,15 @@ export class SttSession {
       return;
     }
 
+    if (this.buffer.length >= this.maxBufferedFrames) {
+      this.closeWith(CLOSE_TRY_AGAIN_LATER, REASON_BACKLOG_EXCEEDED);
+      return;
+    }
     this.seq += 1;
-    this.buffer.push({
-      seq: this.seq,
-      payload: new Uint8Array(bytes),
-      receivedAtMs: performance.now(),
-    });
+    // Kept without a copy: Bun hands every message its own fresh buffer
+    // (never a view into a reused receive buffer), and a second copy per frame
+    // doubled the allocation rate and peak memory under overload.
+    this.buffer.push({ seq: this.seq, payload: bytes, receivedAtMs: performance.now() });
   }
 
   public drain(): void {
@@ -118,6 +137,11 @@ export class SttSession {
   /** @internal Test-only — do not call from production code. */
   public flushOnceForTest(flushLatenessMs: number): Promise<void> {
     return this.flushDue(flushLatenessMs);
+  }
+
+  /** @internal Test-only — do not call from production code. */
+  public maxBufferedFramesForTest(): number {
+    return this.maxBufferedFrames;
   }
 
   /** @internal Test-only — do not call from production code. */
@@ -159,7 +183,23 @@ export class SttSession {
       return Promise.resolve();
     }
 
-    const batch = this.buffer.splice(0, this.buffer.length);
+    const frames = this.buffer.splice(0, this.buffer.length);
+    const oldest = frames[0];
+    const newest = frames[frames.length - 1];
+    if (oldest === undefined || newest === undefined) {
+      return Promise.resolve();
+    }
+    // Only the concatenated body and the edge frames' metadata outlive this
+    // call: the frame array becomes garbage now instead of being pinned (with
+    // a second copy of the same audio) until the request finishes.
+    const batch: Batch = {
+      oldestSeq: oldest.seq,
+      newestSeq: newest.seq,
+      frames: frames.length,
+      oldestReceivedAtMs: oldest.receivedAtMs,
+      newestReceivedAtMs: newest.receivedAtMs,
+      body: concatFrames(frames),
+    };
     const task = this.processBatch(batch, flushLatenessMs).finally(() => {
       if (this.inflight === task) {
         this.inflight = null;
@@ -170,14 +210,8 @@ export class SttSession {
     return task;
   }
 
-  private async processBatch(batch: Frame[], flushLatenessMs: number): Promise<void> {
-    const oldest = batch[0];
-    const newest = batch[batch.length - 1];
-    if (oldest === undefined || newest === undefined) {
-      return;
-    }
-
-    const body = concatFrames(batch);
+  private async processBatch(batch: Batch, flushLatenessMs: number): Promise<void> {
+    const { body } = batch;
     const startedAtMs = performance.now();
     const abort = new AbortController();
     this.inflightAbort = abort;
@@ -187,9 +221,9 @@ export class SttSession {
       if (!this.closed) {
         await this.outbox.enqueue(
           buildPartialMessage({
-            oldestFrameSeq: oldest.seq,
-            newestFrameSeq: newest.seq,
-            frames: batch.length,
+            oldestFrameSeq: batch.oldestSeq,
+            newestFrameSeq: batch.newestSeq,
+            frames: batch.frames,
             prediction,
             cpuPasses: this.config.cpuPasses,
             modelDelayMs: this.config.modelDelayMs,
@@ -217,12 +251,12 @@ export class SttSession {
           stage: details.stage,
           kind: details.kind,
           message: details.message,
-          oldestFrameSeq: oldest.seq,
-          newestFrameSeq: newest.seq,
-          frames: batch.length,
+          oldestFrameSeq: batch.oldestSeq,
+          newestFrameSeq: batch.newestSeq,
+          frames: batch.frames,
           audioBytes: body.byteLength,
-          oldestAgeMs: nowMs - oldest.receivedAtMs,
-          newestAgeMs: nowMs - newest.receivedAtMs,
+          oldestAgeMs: nowMs - batch.oldestReceivedAtMs,
+          newestAgeMs: nowMs - batch.newestReceivedAtMs,
           flushLatenessMs,
           inferenceElapsedMs: nowMs - startedAtMs,
           inflightGatewayBatches: 1,

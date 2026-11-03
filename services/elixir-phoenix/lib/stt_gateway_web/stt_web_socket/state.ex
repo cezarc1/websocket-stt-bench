@@ -6,6 +6,10 @@ defmodule SttGatewayWeb.SttWebSocket.State do
   @type t :: %__MODULE__{
           seq: non_neg_integer(),
           buffer: [frame()],
+          # length(buffer), kept so the per-frame backlog check is O(1).
+          buffered: non_neg_integer(),
+          # See SttGatewayWeb.SttWebSocket.max_buffered_frames/3.
+          max_buffered_frames: pos_integer(),
           cpu_passes: non_neg_integer(),
           model_delay_ms: non_neg_integer(),
           flush_interval_ms: pos_integer(),
@@ -18,6 +22,8 @@ defmodule SttGatewayWeb.SttWebSocket.State do
 
   defstruct seq: 0,
             buffer: [],
+            buffered: 0,
+            max_buffered_frames: 300,
             cpu_passes: 0,
             model_delay_ms: 0,
             flush_interval_ms: 1_000,

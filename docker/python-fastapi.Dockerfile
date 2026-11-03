@@ -1,24 +1,30 @@
-ARG PYTHON_FT_IMAGE=quay.io/pypa/manylinux_2_28_aarch64@sha256:c269bed3fc0ba21aac08ff67bf1d657d4967a9c0582fc8880a0e302f8ca78bdd
+ARG PYTHON_FT_IMAGE=quay.io/pypa/manylinux_2_28_aarch64@sha256:54b271d9562a3686298880df05367909e949ed317e7b1b79b59c696d75f78676
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
 
-# PY_VARIANT selects between the free-threaded build (default, "ft") and the
-# GIL-enabled build ("gil"). The manylinux base ships both /opt/python/cp314-cp314t
-# (FT) and /opt/python/cp314-cp314 (regular). Compose passes the gil trio for
-# the experimental python-fastapi-stock-gil-single service.
+# CPython 3.15.2 gateway. PY_VARIANT selects between the free-threaded build
+# (default, "ft": /opt/python/cp315-cp315t, image python-fastapi-ft315) and the
+# GIL-enabled build ("gil": /opt/python/cp315-cp315, image python-fastapi-gil315)
+# shipped in the same manylinux base. Interpreter version and digests are
+# pinned in versions.lock.toml [python] / [containers.python]; PYTHON_FT_IMAGE
+# is the base for both variants.
 ARG PY_VARIANT=ft
-ARG PY_DIR=cp314-cp314t
-ARG PY_EXE=python3.14t
+ARG PY_DIR=cp315-cp315t
+ARG PY_EXE=python3.15t
 ARG PY_GIL_DISABLED_EXPECTED=1
+ARG PY_VERSION_EXPECTED=3.15.2
 
 FROM ${UV_IMAGE} AS uv-bin
 
-FROM ${PYTHON_FT_IMAGE} AS app-build
+# Interpreter + pinned uv, no project files: `just py-lock` runs `uv lock`
+# in this stage with services/python-fastapi mounted.
+FROM ${PYTHON_FT_IMAGE} AS toolchain
 
 ARG UV_VERSION=0.11.7
 ARG PY_VARIANT
 ARG PY_DIR
 ARG PY_EXE
 ARG PY_GIL_DISABLED_EXPECTED
+ARG PY_VERSION_EXPECTED
 
 ENV PATH="/opt/python/${PY_DIR}/bin:/opt/uv:${PATH}" \
     UV_COMPILE_BYTECODE=1 \
@@ -29,13 +35,15 @@ ENV PATH="/opt/python/${PY_DIR}/bin:/opt/uv:${PATH}" \
     PYTHONUNBUFFERED=1 \
     PY_VARIANT=${PY_VARIANT} \
     PY_EXE=${PY_EXE} \
-    PY_GIL_DISABLED_EXPECTED=${PY_GIL_DISABLED_EXPECTED}
+    PY_GIL_DISABLED_EXPECTED=${PY_GIL_DISABLED_EXPECTED} \
+    PY_VERSION_EXPECTED=${PY_VERSION_EXPECTED}
 
 RUN ${PY_EXE} - <<PY
 import sys
 import sysconfig
 
-assert sys.version_info[:3] == (3, 14, 4), sys.version
+expected_version = tuple(int(p) for p in "${PY_VERSION_EXPECTED}".split("."))
+assert sys.version_info[:3] == expected_version, sys.version
 expected_gil_disabled = int("${PY_GIL_DISABLED_EXPECTED}")
 assert sysconfig.get_config_var("Py_GIL_DISABLED") == expected_gil_disabled, \
     f"expected Py_GIL_DISABLED={expected_gil_disabled}"
@@ -66,10 +74,24 @@ RUN mkdir -p /opt/python-runtime-libs \
     /lib64/libzstd.so.1 \
     /opt/python-runtime-libs/
 
+FROM toolchain AS app-build
 WORKDIR /app
 COPY services/python-fastapi/pyproject.toml services/python-fastapi/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
   uv sync --locked --no-dev --no-install-project
+
+# `--target test`: the full Python gate (ruff format --check, ruff check,
+# ty, pytest) on this image's interpreter and lock; `just python-check` builds
+# it for both variants. Not part of the default (runtime) target.
+FROM app-build AS test
+RUN --mount=type=cache,target=/root/.cache/uv \
+  uv sync --locked --no-install-project
+COPY services/python-fastapi/app ./app
+COPY services/python-fastapi/tests ./tests
+RUN .venv/bin/ruff format --check . \
+  && .venv/bin/ruff check . \
+  && .venv/bin/ty check --python .venv app tests \
+  && PYTHONPATH=. .venv/bin/pytest tests -q
 
 FROM debian:bookworm-20260421-slim
 
@@ -77,6 +99,7 @@ ARG PY_VARIANT
 ARG PY_DIR
 ARG PY_EXE
 ARG PY_GIL_DISABLED_EXPECTED
+ARG PY_VERSION_EXPECTED
 
 ENV PATH="/app/.venv/bin:/opt/python/${PY_DIR}/bin:/opt/uv:${PATH}" \
     LD_LIBRARY_PATH="/opt/python-runtime-libs" \
@@ -87,7 +110,8 @@ ENV PATH="/app/.venv/bin:/opt/python/${PY_DIR}/bin:/opt/uv:${PATH}" \
     VIRTUAL_ENV=/app/.venv \
     PY_VARIANT=${PY_VARIANT} \
     PY_EXE=${PY_EXE} \
-    PY_GIL_DISABLED_EXPECTED=${PY_GIL_DISABLED_EXPECTED}
+    PY_GIL_DISABLED_EXPECTED=${PY_GIL_DISABLED_EXPECTED} \
+    PY_VERSION_EXPECTED=${PY_VERSION_EXPECTED}
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates \
@@ -106,7 +130,8 @@ import sqlite3
 import sys
 import sysconfig
 
-assert sys.version_info[:3] == (3, 14, 4), sys.version
+expected_version = tuple(int(p) for p in "${PY_VERSION_EXPECTED}".split("."))
+assert sys.version_info[:3] == expected_version, sys.version
 expected_gil_disabled = int("${PY_GIL_DISABLED_EXPECTED}")
 assert sysconfig.get_config_var("Py_GIL_DISABLED") == expected_gil_disabled, \
     f"expected Py_GIL_DISABLED={expected_gil_disabled}"
@@ -121,6 +146,9 @@ WORKDIR /app
 COPY --from=app-build /app/.venv ./.venv
 COPY services/python-fastapi/pyproject.toml services/python-fastapi/uv.lock ./
 COPY services/python-fastapi/app ./app
+# Fail the build if the baked PY_VERSION_EXPECTED / PY_GIL_DISABLED_EXPECTED /
+# PY_VARIANT env disagrees with the interpreter (the same check runs at startup).
+RUN /app/.venv/bin/python -c "from app.runtime import assert_runtime; assert_runtime()"
 COPY docker/python-launch.sh /usr/local/bin/python-launch.sh
 RUN chmod +x /usr/local/bin/python-launch.sh
 

@@ -37,6 +37,10 @@
 #                 default: scheduler's choice
 #   VERIFY_EVERY  loadgen --verify-every (default 1 = check every partial's
 #                 values; continuity is always checked)
+#   LOADGEN_THREADS  Tokio worker threads (default LOADGEN_CPU). Set explicitly:
+#                 an idle surplus of workers costs CPU the gateway may need.
+#   LOADGEN_CPUSET   pin the loadgen process to these host CPUs with taskset
+#                 (e.g. 16-31, the E-cores on an i9-13900); default: unpinned
 set -euo pipefail
 
 SESS="${1:?usage: SVC=.. PORT=.. LABEL=.. run_point.sh <sessions> [warmup measure ramp spread]}"
@@ -56,6 +60,10 @@ LOADGEN_CPU="${LOADGEN_CPU:-4}"
 LOADGEN_MEM="${LOADGEN_MEM:-4Gi}"
 LOADGEN_NODE="${LOADGEN_NODE:-}"
 VERIFY_EVERY="${VERIFY_EVERY:-1}"
+LOADGEN_THREADS="${LOADGEN_THREADS:-$LOADGEN_CPU}"
+LOADGEN_CPUSET="${LOADGEN_CPUSET:-}"
+PIN=""
+[ -n "$LOADGEN_CPUSET" ] && PIN="taskset -c ${LOADGEN_CPUSET}"
 NODE_SELECTOR=""
 [ -n "$LOADGEN_NODE" ] && NODE_SELECTOR="nodeSelector: { kubernetes.io/hostname: \"${LOADGEN_NODE}\" }"
 
@@ -97,7 +105,7 @@ spec:
               set -eu
               mkdir -p /results
               sleep 5
-              stt-loadgen \
+              TOKIO_WORKER_THREADS=${LOADGEN_THREADS} ${PIN} stt-loadgen \
                 --url ${GW_URL} \
                 --service-name ${PREFIX} \
                 --sessions ${SESS} \

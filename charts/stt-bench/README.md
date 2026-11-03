@@ -75,8 +75,8 @@ kubectl -n stt-bench scale deploy \
   stt-go-nethttp-2vcpu-gateway \
   stt-typescript-bun-gateway \
   stt-elixir-phoenix-gateway \
-  stt-python-fastapi-ft-gateway \
-  stt-python-fastapi-gil-gateway \
+  stt-python-fastapi-ft315-gateway \
+  stt-python-fastapi-gil315-gateway \
   --replicas=0
 kubectl -n stt-bench delete job -l app=stt-benchmark --ignore-not-found
 ```

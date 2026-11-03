@@ -1,5 +1,18 @@
 # Rust / No-Async-Runtime Benchmark Notes
 
+## 2026-11-02/03 homelab runs (co-located, pinned, correctness-verified)
+
+One k3s node (i9-13900F); gateway pinned to P-cores 0,2 with a 1- or 2-vCPU quota and 4 GiB, loadgen on 4-11 (8 Tokio workers), inference on 12-15. Two independent full passes (run3, run4) after in-cluster conformance on the same images, plus targeted re-runs where listed (run5: C++ 2 vCPU; run6: OCaml 2 vCPU; run7: re-measured with the step-down sweep fix); the README reports the lowest confirmed value. "Confirmed" = every repeat passed (≥2/2) and the next step failed. Raw logs: `results/homelab/` (gitignored).
+
+| Pass | vCPU | Confirmed | First solid fail | Borderline | Fail reason at first solid fail | Gateway cores at that fail |
+|---|---:|---:|---:|---|---|---:|
+| run3 | 1 | **4800** | 5000 | 4900 (1/2 pass) | `newest_p50=209>200` | 1.00 |
+| run4 | 1 | **4800** | 5000 | 4900 (1/2 pass) | `newest_p50=213>200` | 1.00 |
+| run3 | 2 | **5100** | 5300 | 5200 (1/2 pass) | `newest_p50=201>200` | 1.14 |
+| run4 | 2 | **5200** | 5300 | — | `newest_p50=202>200` | 1.14 |
+
+Two OS threads by design: the gateway uses about 1.14 of its 2 cores at 2 vCPU (host `/proc/stat` on cores 0,2 agrees), so 2 vCPU adds little. Pinned vs unpinned at 4800 (1 vCPU): 2/2 pass pinned, 2/2 fail unpinned (newest p50 196 → 419-469 ms) — unpinned, the gateway competed with the loadgen for its cores 4-11.
+
 ## 2026-10-28 homelab re-run (split nodes, correctness-verified)
 
 Split nodes: gateway + loadgen on node `cezar-4090`, one 6-CPU inference replica on node `2080` across the LAN; images tagged `gateway-fixes`. Every measured partial was verified client-side (exact stub values + per-session frame continuity) and `correctness_errors` was 0 on every point below. Same harness (`scripts/bench/run_point.sh`: 10 s warmup, 45 s measured, 30 s ramp, 1000 ms spread) and SLO; confirmed = 2/2 passes. Not directly comparable with the earlier single-node sections below, which are kept as history (see the README note).

@@ -26,8 +26,8 @@ the playbook is the program.
   "Shared protocol contract" + `loadgen/rust/src/protocol.rs` +
   `stt-conformance` — not another gateway's internals.
 - **Comparability contract:** measure with `scripts/bench/{run_point,ladder,
-  eval_slo}` only. Fixed for all runtimes: 1/2-vCPU·2 GiB pods, dedicated
-  inference, 10/45/30 s + 1000 ms, the SLO gates, and
+  eval_slo}` only. Fixed for all runtimes: 1/2-vCPU·4 GiB pods pinned to disjoint
+  CPUs from loadgen and inference, 10/45/30 s + 1000 ms, the SLO gates, and
   `confirmed (repeat-pass) ↔ borderline ↔ first-solid-fail` bracketing.
 - **Honesty:** never fabricate/interpolate a number; "borderline" ≠
   "confirmed"; never claim a runtime feature you didn't exercise (prove a

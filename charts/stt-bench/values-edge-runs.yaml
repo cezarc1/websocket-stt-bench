@@ -30,23 +30,23 @@ loadgen:
       sessions: 2250
       outputPrefix: elixir-phoenix-2vcpu-2250
       suspend: true
-    - name: python-ft-180
-      gateway: pythonFt
-      serviceName: python-fastapi-ft-1vcpu-k8s
-      sessions: 180
-      outputPrefix: python-fastapi-ft-1vcpu-180
+    - name: python-ft315-1000
+      gateway: pythonFt315
+      serviceName: python-fastapi-ft315-1vcpu-k8s
+      sessions: 1000
+      outputPrefix: python-fastapi-ft315-1vcpu-1000
       suspend: true
-    - name: python-ft-205
-      gateway: pythonFt
-      serviceName: python-fastapi-ft-2vcpu-k8s
-      sessions: 205
-      outputPrefix: python-fastapi-ft-2vcpu-205
+    - name: python-ft315-1500
+      gateway: pythonFt315
+      serviceName: python-fastapi-ft315-2vcpu-k8s
+      sessions: 1500
+      outputPrefix: python-fastapi-ft315-2vcpu-1500
       suspend: true
-    - name: python-gil-1100
-      gateway: pythonGil
-      serviceName: python-fastapi-gil-1vcpu-k8s
-      sessions: 1100
-      outputPrefix: python-fastapi-gil-1vcpu-1100
+    - name: python-gil315-1000
+      gateway: pythonGil315
+      serviceName: python-fastapi-gil315-1vcpu-k8s
+      sessions: 1000
+      outputPrefix: python-fastapi-gil315-1vcpu-1000
       suspend: true
     - name: typescript-bun-2550
       gateway: typescriptBun

@@ -15,6 +15,8 @@ defmodule SttGatewayWeb.SttWebSocket do
   @default_flush_phase_jitter_ms 0
   @close_protocol_error 1002
   @close_unsupported_data 1003
+  @close_try_again_later 1013
+  @frame_ms 20
 
   @type ws_in :: {binary(), [opcode: :text | :binary]}
   @type close_payload :: {non_neg_integer(), binary()}
@@ -22,12 +24,21 @@ defmodule SttGatewayWeb.SttWebSocket do
   @spec init(list()) :: {:ok, State.t()}
   @impl true
   def init(_opts) do
+    flush_interval_ms = max(env_int("FLUSH_INTERVAL_MS", @default_flush_interval_ms), 1)
+    flush_phase_jitter_ms = env_int("FLUSH_PHASE_JITTER_MS", @default_flush_phase_jitter_ms)
+
     {:ok,
      %State{
        cpu_passes: env_int("CPU_PASSES", @default_cpu_passes),
        model_delay_ms: env_int("MODEL_DELAY_MS", @default_model_delay_ms),
-       flush_interval_ms: max(env_int("FLUSH_INTERVAL_MS", @default_flush_interval_ms), 1),
-       flush_phase_jitter_ms: env_int("FLUSH_PHASE_JITTER_MS", @default_flush_phase_jitter_ms),
+       flush_interval_ms: flush_interval_ms,
+       flush_phase_jitter_ms: flush_phase_jitter_ms,
+       max_buffered_frames:
+         max_buffered_frames(
+           flush_interval_ms,
+           flush_phase_jitter_ms,
+           SttGateway.Inference.receive_timeout_ms()
+         ),
        inference_url: Application.fetch_env!(:stt_gateway, :inference_url),
        finch_name: SttGateway.Application.finch_name()
      }}
@@ -59,12 +70,27 @@ defmodule SttGatewayWeb.SttWebSocket do
     do: close(state, @close_protocol_error, "first message must be start")
 
   @impl true
-  def handle_in({payload, [opcode: :binary]}, state)
-      when byte_size(payload) == @frame_bytes do
+  def handle_in(
+        {payload, [opcode: :binary]},
+        %State{buffered: buffered, max_buffered_frames: max_buffered} = state
+      )
+      when byte_size(payload) == @frame_bytes and buffered < max_buffered do
     seq = state.seq + 1
     received_at_us = System.monotonic_time(:microsecond)
-    {:ok, %{state | seq: seq, buffer: [{seq, payload, received_at_us} | state.buffer]}}
+
+    {:ok,
+     %{
+       state
+       | seq: seq,
+         buffer: [{seq, payload, received_at_us} | state.buffer],
+         buffered: buffered + 1
+     }}
   end
+
+  @impl true
+  def handle_in({payload, [opcode: :binary]}, state)
+      when byte_size(payload) == @frame_bytes,
+      do: close(state, @close_try_again_later, "gateway overloaded: frame backlog limit exceeded")
 
   @impl true
   def handle_in({_payload, [opcode: :binary]}, state),
@@ -119,7 +145,7 @@ defmodule SttGatewayWeb.SttWebSocket do
         inference_elapsed_ms: error_payload.inference_elapsed_ms,
         # Always 1: one-inflight-per-connection invariant from CLAUDE.md.
         inflight_gateway_batches: 1,
-        gateway_buffer_frames: length(state.buffer),
+        gateway_buffer_frames: state.buffered,
         inference_status: error_payload.inference_status,
         retryable: error_payload.retryable
       })
@@ -159,7 +185,29 @@ defmodule SttGatewayWeb.SttWebSocket do
       state.finch_name
     )
 
-    {:ok, %{state | buffer: [], next_due_us: next_due_us, busy?: true}}
+    {:ok, %{state | buffer: [], buffered: 0, next_due_us: next_due_us, busy?: true}}
+  end
+
+  @doc """
+  Per-session backlog cap, derived from the timeouts so it never fires for a
+  session whose requests finish (even by timing out). Frames only pile up while
+  a flush waits: before the first flush (one interval plus the phase jitter),
+  or while the single in-flight request runs, which Finch's receive_timeout
+  bounds, plus up to one interval until the next tick takes them. The longest
+  healthy wait is max(interval + jitter, receive_timeout + interval) = 3 s =
+  150 frames at the defaults; the cap is twice that (300 frames, 6 s, ~190 KiB)
+  so a scheduler stall of another full wait still passes. Only a session whose
+  flushes have stalled (gateway overloaded, requests queued in the Finch pools)
+  reaches it; it is closed with 1013 rather than buffering until the VM is
+  OOM-killed. Frames are never dropped silently: the close tells the client its
+  unreported tail was abandoned.
+  """
+  @spec max_buffered_frames(pos_integer(), non_neg_integer(), pos_integer()) :: pos_integer()
+  def max_buffered_frames(flush_interval_ms, flush_phase_jitter_ms, receive_timeout_ms) do
+    longest_wait_ms =
+      max(flush_interval_ms + flush_phase_jitter_ms, receive_timeout_ms + flush_interval_ms)
+
+    2 * ceil(longest_wait_ms / @frame_ms)
   end
 
   @spec terminate(term(), State.t()) :: :ok

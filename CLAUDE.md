@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A comparative benchmark of streaming speech-to-text gateways implementing one shared WebSocket protocol across three runtimes:
 
 - `services/rust-axum/` — Axum + Tokio gateway
-- `services/python-fastapi/` — FastAPI on Granian gateway, CPython 3.14 free-threading
+- `services/python-fastapi/` — FastAPI on Granian gateway, CPython 3.15.2t free-threading (plus a 3.15.2 GIL build of the same code)
 - `services/elixir-phoenix/` — Phoenix + Bandit gateway (`WebSock` adapter, no channels)
 - `services/inference-server/` — shared deterministic compute (Rust + Axum). All three gateways POST batched PCM here over HTTP/2 instead of computing inline.
 - `loadgen/rust/` — single Rust load generator that drives all three
@@ -51,10 +51,11 @@ If you add a new code path that spawns inference work per flush, preserve this g
 
 ## Versions are pinned, hard
 
-`versions.lock.toml` is the source of truth. `scripts/doctor.sh` enforces exact versions of `just`, `uv`, Rust, Python (including `Py_GIL_DISABLED=1`), Elixir/OTP, and the cargo plugins.
+`versions.lock.toml` is the source of truth. `scripts/doctor.sh` enforces exact versions of `just`, `uv`, Rust, Elixir/OTP, and the cargo plugins, and checks that the container-only Python pins agree across `versions.lock.toml`, the pyproject and the image builds.
 
 - The repo ships its own pinned `uv` into `.tools/bin/` via `scripts/ensure-uv.sh` — always invoke uv as `.tools/bin/uv`, never the system one.
-- Python is `3.14.4t` (free-threading). The FastAPI app aborts startup if `Py_GIL_DISABLED != 1` or `sys._is_gil_enabled()` is true (`services/python-fastapi/app/runtime.py::assert_runtime`). Don't relax that check.
+- Python is CPython `3.15.2t` (free-threading, image `python-fastapi-ft315`, chart key `pythonFt315`) and `3.15.2` (GIL, image `python-fastapi-gil315`, chart key `pythonGil315`), built from one lock (`services/python-fastapi/{pyproject.toml,uv.lock}`) on the manylinux digest in `[containers.python]` of `versions.lock.toml`. Each image bakes `PY_VERSION_EXPECTED` + `PY_GIL_DISABLED_EXPECTED`, and the app aborts startup unless the interpreter matches both exactly (`services/python-fastapi/app/runtime.py::assert_runtime`). Don't relax that check.
+- Python is container-only: there is no local CPython 3.15.2 (the pinned uv only offers 3.15 pre-releases on macOS), so `just python-check` and `just py-lock` run in Docker via `scripts/python-docker.sh`. The separate `analysis/` tooling still runs on a local CPython 3.14.4 (`analysis/pyproject.toml`, root `.python-version`).
 - Rust uses edition 2024, `rust-version = "1.95.0"`, exact-version `=` constraints in `Cargo.toml`.
 - Cargo workspace lives at the repo root and contains `loadgen/rust`, `services/rust-axum`, and `services/inference-server`.
 
@@ -65,12 +66,12 @@ When bumping a dependency, update `versions.lock.toml`, the relevant lockfile (`
 Always prefer the focused per-language gate while iterating, then `just check` before claiming done.
 
 - `just doctor` — verify toolchain matches `versions.lock.toml`, install pinned uv into `.tools/bin/`.
-- `just check` — full gate: doctor + python-check + elixir-check + rust-check.
-- `just python-check` — `ruff format --check`, `ruff check`, `ty check` (runs via `.tools/bin/uv run`).
+- `just check` — full gate: doctor + python-check + analysis-check + every other language check.
+- `just python-check` — `ruff format --check`, `ruff check`, `ty check`, `pytest` inside the Dockerfile `test` stage, for both 3.15.2t and 3.15.2.
 - `just elixir-check` — `mix format --check-formatted`, `mix credo --strict`, `mix dialyzer`, `mix test`.
 - `just rust-check` — `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`, `cargo nextest run --workspace --all-features --locked`, `cargo deny check`.
 - `just rust-tools` — install pinned `cargo-nextest` and `cargo-deny`. Required before first `rust-check`.
-- `just py-lock` / `just py-sync` — regenerate or sync the FastAPI venv from `uv.lock`.
+- `just py-lock` — regenerate `services/python-fastapi/uv.lock` with the pinned uv inside the 3.15.2t image (`toolchain` stage).
 - `just compose-build` / `just compose-single` / `just compose-multi` — build images, run the `single` (1 CPU / 1 GB) or `multi` (4 CPU / 1 GB) profile.
 - `just conformance` — build images, start the single-profile services, and run black-box protocol conformance from the loadgen image.
 - `just bench-ladder SERVICE ws://HOST:PORT/ws/stt` — runs the 50→2000 session ladder (15 s warmup, 90 s measure, 3 repeats), writes paired `*.summary.json` and `*.samples.csv` files.
@@ -85,9 +86,9 @@ Run a single Rust test: `cargo nextest run -p stt-loadgen payload_is_one_pcm_fra
 - `single` profile (1 CPU, 1 GB): `python-fastapi-stock-single`, `python-fastapi-mt-single`, `elixir-phoenix-single`, `rust-axum-single`.
 - `multi` profile (4 CPU, 1 GB): same four with `-multi` suffix and `WORKER_THREADS=4`.
 
-Python ships two flavors per profile:
+Python ships two free-threaded (CPython 3.15.2t) flavors per profile, plus a `python-fastapi-stock-gil-{single,multi}` CPython 3.15.2 GIL build on port `8003`:
 - **stock** = one asyncio loop; free-threading still benefits the in-process `ThreadPoolExecutor` sized by `WORKER_THREADS`.
-- **mt** = Granian multi-loop, controlled by `GRANIAN_RUNTIME_THREADS`. This is the headline 3.14t configuration.
+- **mt** = Granian multi-loop, controlled by `GRANIAN_RUNTIME_THREADS`. This is the headline free-threaded configuration.
 
 Port map: Rust `3001`, Python stock `8001`, Python mt `8002`, Elixir `4001`. The `loadgen` profile mounts `./results` and runs the load generator container; for local benches against host services use `just bench-ladder SERVICE ws://127.0.0.1:<port>/ws/stt`.
 
@@ -137,5 +138,5 @@ done
 
 - **Don't commit** `.tools/`, `target/`, `.venv/`, `_build/`, `deps/`, `results/` outputs, logs, dumps, `__pycache__/` (`.gitignore` covers them).
 - Rust: snake_case modules/functions/fields, `cargo clippy -- -D warnings` is treated as the formatter for logic.
-- Python: Ruff with 100-char line length, `target-version = "py314"`, lint set defaults + `I,UP,B,SIM,ASYNC,RUF,PERF,C4,PIE,RET,LOG,G,FA` (`services/python-fastapi/pyproject.toml`). Type-check with `ty`, not mypy.
+- Python: Ruff with 100-char line length, `target-version = "py315"` (ruff 0.15.12 supports it but prints a preview-support warning), lint set defaults + `I,UP,B,SIM,ASYNC,RUF,PERF,C4,PIE,RET,LOG,G,FA` (`services/python-fastapi/pyproject.toml`). Type-check with `ty`, not mypy.
 - Elixir: `SttGateway.*` namespace; Credo runs in `--strict` mode; Dialyzer is part of the gate, so add `@spec` for new public functions.

@@ -1,5 +1,16 @@
 # TypeScript / Bun Benchmark Notes
 
+## 2026-11-02/03 homelab runs (co-located, pinned, correctness-verified)
+
+One k3s node (i9-13900F); gateway pinned to P-cores 0,2 with a 1- or 2-vCPU quota and 4 GiB, loadgen on 4-11 (8 Tokio workers), inference on 12-15. Two independent full passes (run3, run4) after in-cluster conformance on the same images, plus targeted re-runs where listed (run5: C++ 2 vCPU; run6: OCaml 2 vCPU; run7: re-measured with the step-down sweep fix); the README reports the lowest confirmed value. "Confirmed" = every repeat passed (≥2/2) and the next step failed. Raw logs: `results/homelab/` (gitignored).
+
+| Pass | vCPU | Confirmed | First solid fail | Borderline | Fail reason at first solid fail | Gateway cores at that fail |
+|---|---:|---:|---:|---|---|---:|
+| run3 | 1 | **2750** | 2800 | — | `err_rate=1.37e-02>1e-5` | 0.88 |
+| run4 | 1 | **2750** | 2800 | — | `newest_p95=1538>350;oldest_p95=3670>1650;err_rate=1.25e-02>1e-5` | 0.87 |
+
+Not CPU-bound: the gateway uses about 0.8 of its core. At 2800-2900 sessions Bun's `fetch` client starts timing out on inference requests (run3 at 2900: 12,843 timeouts and 1,163 connection resets while inference sat at 0.41 cores, unthrottled); the 1,085 correctness errors there are all `missing_tail` (a session's final frames never reported after those failures), not wrong values. 2 vCPU not measured. Pinned vs unpinned at 2750: 2/2 pass pinned, 2/2 collapse unpinned.
+
 ## 2026-10-28 homelab re-run (split nodes, correctness-verified)
 
 Split nodes: gateway + loadgen on node `cezar-4090`, one 6-CPU inference replica on node `2080` across the LAN; images tagged `gateway-fixes`. Every measured partial was verified client-side (exact stub values + per-session frame continuity) and `correctness_errors` was 0 on every point below. Same harness (`scripts/bench/run_point.sh`: 10 s warmup, 45 s measured, 30 s ramp, 1000 ms spread) and SLO; confirmed = 2/2 passes. Not directly comparable with the earlier single-node sections below, which are kept as history (see the README note).

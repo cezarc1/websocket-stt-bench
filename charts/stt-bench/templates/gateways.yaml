@@ -28,6 +28,12 @@ spec:
       {{- end }}
       securityContext:
         {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+      {{- $affinity := $gateway.cpuAffinity | default $.Values.gatewayCpuAffinity }}
+      {{- if $affinity }}
+      # The cpu-pin sidecar re-applies the CPU list to every thread in the pod
+      # (same UID, so no capabilities); no image's start command is touched.
+      shareProcessNamespace: true
+      {{- end }}
       containers:
         - name: gateway
           image: {{ include "stt-bench.image" (list $ $gateway.image $gateway.imageTag) }}
@@ -66,6 +72,23 @@ spec:
             {{- toYaml $gateway.resources | nindent 12 }}
           securityContext:
             {{- toYaml $.Values.containerSecurityContext | nindent 12 }}
+        {{- if $affinity }}
+        - name: cpu-pin
+          image: {{ include "stt-bench.image" (list $ "loadgen" "") }}
+          imagePullPolicy: {{ $.Values.images.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              while :; do
+                for p in /proc/[0-9]*; do taskset -a -pc {{ $affinity }} "${p#/proc/}" >/dev/null 2>&1; done
+                sleep 5
+              done
+          resources:
+            requests: { cpu: 5m, memory: 16Mi }
+            limits: { cpu: 50m, memory: 32Mi }
+          securityContext:
+            {{- toYaml $.Values.containerSecurityContext | nindent 12 }}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service
