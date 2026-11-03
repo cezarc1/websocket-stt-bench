@@ -468,14 +468,15 @@ struct Output {
     newest_frame_to_partial_latency: Percentiles,
     oldest_frame_to_partial_latency: Percentiles,
     flush_lateness: Percentiles,
-    /// How late the loadgen itself ran each measured frame send: time from
-    /// when the send became due (its tick elapsed and the previous write
-    /// finished) until the session task actually ran. Gateway back-pressure
-    /// is excluded; a busy loadgen (receive path, starved workers) is not.
-    /// Includes the tokio timer's ~1 ms granularity. Large values mean the
-    /// harness, not the gateway, delayed timestamps and the point is invalid.
+    /// How late each measured frame send started vs. its schedule. Latency is
+    /// measured from the schedule, so all of this is charged to the gateway.
+    /// It is the loadgen's own delay (busy workers, its receive path, the
+    /// tokio timer's ~1 ms granularity) unless `send_block` is also large.
     harness_lag: Percentiles,
     harness_lag_samples: u64,
+    /// Time spent inside each measured frame write: TCP back-pressure (the
+    /// gateway not reading) or a write that had to wait for the runtime.
+    send_block: Percentiles,
 }
 
 #[derive(Debug, Serialize)]
@@ -526,6 +527,7 @@ async fn main() -> anyhow::Result<()> {
             + Duration::from_secs(args.session_grace_secs),
     };
     let harness_lag = Arc::new(Mutex::new(lag_histogram()?));
+    let send_block = Arc::new(Mutex::new(lag_histogram()?));
     let (sample_tx, mut sample_rx) = mpsc::channel::<Sample>(8192);
     let run_start = Instant::now();
     let measure_start = run_start + pre_measure_delay;
@@ -541,7 +543,9 @@ async fn main() -> anyhow::Result<()> {
         let verify_tx = verifier.sender();
         let url = args.url.clone();
         let lag_total = Arc::clone(&harness_lag);
+        let block_total = Arc::clone(&send_block);
         let mut lag = lag_histogram()?;
+        let mut block = lag_histogram()?;
         let session_start_at = run_start
             + session_start_delay(session_id, args.sessions, ramp_up, session_start_spread);
         tokio::spawn(async move {
@@ -561,6 +565,7 @@ async fn main() -> anyhow::Result<()> {
                     session_correctness,
                     verify_tx,
                     &mut lag,
+                    &mut block,
                 ),
             )
             .await
@@ -569,6 +574,11 @@ async fn main() -> anyhow::Result<()> {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .add(&lag)
+                .ok();
+            block_total
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .add(&block)
                 .ok();
             record_session_outcome(session_id, outcome, &errors, &counters);
         });
@@ -616,6 +626,10 @@ async fn main() -> anyhow::Result<()> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone();
+    let send_block = send_block
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
 
     let inference_error_snapshot = inference_error_details
         .lock()
@@ -652,6 +666,7 @@ async fn main() -> anyhow::Result<()> {
         flush_lateness: percentiles(&flush_hist),
         harness_lag: percentiles(&harness_lag),
         harness_lag_samples: harness_lag.len(),
+        send_block: percentiles(&send_block),
     };
 
     println!("{}", serde_json::to_string_pretty(&output)?);
@@ -673,6 +688,7 @@ async fn run_session(
     correctness: Arc<Correctness>,
     verify_tx: SyncSender<VerifyJob>,
     lag: &mut Histogram<u32>,
+    block: &mut Histogram<u32>,
 ) -> anyhow::Result<()> {
     sleep_until(session_start_at).await;
     let mut check = SessionCheck::default();
@@ -707,12 +723,13 @@ async fn run_session(
     let mut sent_times = Vec::<Instant>::new();
     let mut seq = 0_u64;
     let mut next_tick = Instant::now();
-    let mut last_send_done = next_tick;
     while Instant::now() < end_at {
         tokio::select! {
             () = sleep_until(next_tick), if Instant::now() < end_at => {
-                if next_tick >= measure_start {
-                    lag.saturating_record(harness_lag_us(Instant::now(), next_tick, last_send_done));
+                let woke = Instant::now();
+                let measured = next_tick >= measure_start;
+                if measured {
+                    lag.saturating_record(micros_since(woke, next_tick));
                 }
                 seq += 1;
                 // Latency is measured from the *scheduled* send time, not the
@@ -735,7 +752,9 @@ async fn run_session(
                     "send pcm frame",
                 )
                 .await?;
-                last_send_done = Instant::now();
+                if measured {
+                    block.saturating_record(micros_since(Instant::now(), woke));
+                }
                 next_tick += FRAME_INTERVAL;
             }
             message = read.next() => {
@@ -1047,18 +1066,14 @@ where
     }
 }
 
-/// Per-session harness-lag histogram (µs, 2 significant figures, ~9 KB),
+/// Per-session lag/block histogram (µs, 2 significant figures, ~9 KB),
 /// merged into the run total when the session ends.
 fn lag_histogram() -> anyhow::Result<Histogram<u32>> {
     Histogram::new_with_bounds(1, 10_000_000, 2).context("harness lag histogram")
 }
 
-/// Harness lag of one send: how long after it became due -- its tick elapsed
-/// *and* the previous write returned -- the session task got to run. Waiting
-/// on a slow previous write is gateway back-pressure, not harness lag.
-fn harness_lag_us(woke: Instant, due: Instant, last_send_done: Instant) -> u64 {
-    woke.saturating_duration_since(due.max(last_send_done))
-        .as_micros() as u64
+fn micros_since(now: Instant, since: Instant) -> u64 {
+    now.saturating_duration_since(since).as_micros() as u64
 }
 
 fn percentiles<T: Counter>(histogram: &Histogram<T>) -> Percentiles {
@@ -1522,20 +1537,6 @@ mod tests {
                 h.correctness.verify_dropped.load(Ordering::Relaxed)
             );
         }
-    }
-
-    #[test]
-    fn harness_lag_excludes_gateway_back_pressure() {
-        let due = Instant::now();
-        let ms = Duration::from_millis;
-        // On time, and a task that woke 3 ms after its tick.
-        assert_eq!(harness_lag_us(due, due, due - ms(20)), 0);
-        assert_eq!(harness_lag_us(due + ms(3), due, due - ms(20)), 3_000);
-        // The previous write blocked 7 ms past the tick (gateway not reading):
-        // only the 2 ms after it returned is the harness's.
-        assert_eq!(harness_lag_us(due + ms(9), due, due + ms(7)), 2_000);
-        // Woke before the write returned (cannot happen, but never negative).
-        assert_eq!(harness_lag_us(due + ms(1), due, due + ms(7)), 0);
     }
 
     #[test]

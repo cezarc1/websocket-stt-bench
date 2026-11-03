@@ -73,6 +73,7 @@ def main():
     hl = d.get("harness_lag")
     lag = (
         f" harness_lag={hl['p50_ms']:.1f}/{hl['p99_ms']:.1f}/{hl['p999_ms']:.1f}"
+        f" send_block_p99={d.get('send_block', {}).get('p99_ms', 0):.1f}"
         if hl and d.get("harness_lag_samples")
         else ""
     )
