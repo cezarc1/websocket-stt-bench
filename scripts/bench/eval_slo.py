@@ -68,6 +68,14 @@ def main():
     )
     if cdrop:
         correctness += f",{cdrop}dropped"
+    # How late the loadgen itself ran due frame sends (see `harness_lag` in
+    # loadgen/rust/src/main.rs). Reported, not gated yet.
+    hl = d.get("harness_lag")
+    lag = (
+        f" harness_lag={hl['p50_ms']:.1f}/{hl['p99_ms']:.1f}/{hl['p999_ms']:.1f}"
+        if hl and d.get("harness_lag_samples")
+        else ""
+    )
     gates = []
     if nf["p50_ms"] > 200:
         gates.append(f"newest_p50={nf['p50_ms']:.0f}>200")
@@ -93,6 +101,7 @@ def main():
         f"oldest {of['p50_ms']:.0f}/{of['p95_ms']:.0f} "
         f"flush_p95={d['flush_lateness'].get('p95_ms', 0):.2f} "
         f"correctness_err={correctness}"
+        f"{lag}"
     )
 
 
