@@ -6,11 +6,50 @@
 #   <loadgen summary json>  | eval_slo.py <sessions>
 #
 # Prints one line:
-#   <sessions> PASS|FAIL <reason> | partials=.. err=.. newest p50/p95 ...
+#   <sessions> PASS|FAIL|INVALID <reason> | partials=.. err=.. newest p50/p95 ...
 #     ... correctness_err=<n>/<m>verified[,<k>dropped]   (n>0 fails the point)
 # Exits 0 always (the driver brackets on the printed verdict, not exit code).
 import json
 import sys
+
+# A FAIL on latency alone is INVALID (re-run, never a result) when the loadgen
+# itself sent frames this late at p99: latency is measured from each frame's
+# scheduled send time, so harness lag is charged to the gateway one-for-one.
+# The fixed loadgen stays at <= 4 ms p99 up to 8000 sessions; the 128 KiB
+# read-buffer loadgen reached 31-54 ms where it was CPU-bound. Lag explained
+# by the gateway not reading (send_block) is the gateway's, not the harness's.
+HARNESS_LAG_P99_MAX_MS = 10.0
+SEND_BLOCK_P99_MAX_MS = 5.0
+LATENCY_GATES = ("newest_p50", "newest_p95", "oldest_p50", "oldest_p95")
+
+
+def harness_invalid(summary, gates):
+    """Reason the loadgen, not the gateway, may have caused these failed gates.
+
+    >>> lag = lambda p99, block: {"harness_lag": {"p99_ms": p99}, "harness_lag_samples": 1,
+    ...                           "send_block": {"p99_ms": block}}
+    >>> harness_invalid(lag(31.0, 0.0), ["newest_p50=222>200"])
+    'harness_lag_p99=31.0>10'
+    >>> harness_invalid(lag(3.0, 0.0), ["newest_p50=222>200"]) is None
+    True
+    >>> harness_invalid(lag(31.0, 40.0), ["newest_p50=222>200"]) is None  # back-pressure
+    True
+    >>> harness_invalid(lag(31.0, 0.0), ["newest_p50=222>200", "correctness_errors=3"]) is None
+    True
+    >>> harness_invalid(lag(31.0, 0.0), []) is None  # a PASS stands: lag only adds latency
+    True
+    >>> harness_invalid({}, ["newest_p50=222>200"]) is None  # loadgen predates the metric
+    True
+    """
+    lag = summary.get("harness_lag")
+    if not gates or not lag or not summary.get("harness_lag_samples"):
+        return None
+    if not all(g.split("=")[0] in LATENCY_GATES for g in gates):
+        return None
+    block = (summary.get("send_block") or {}).get("p99_ms", 0.0)
+    if lag["p99_ms"] > HARNESS_LAG_P99_MAX_MS and block < SEND_BLOCK_P99_MAX_MS:
+        return f"harness_lag_p99={lag['p99_ms']:.1f}>{HARNESS_LAG_P99_MAX_MS:g}"
+    return None
 
 
 def count_errors(summary):
@@ -69,7 +108,7 @@ def main():
     if cdrop:
         correctness += f",{cdrop}dropped"
     # How late the loadgen itself ran due frame sends (see `harness_lag` in
-    # loadgen/rust/src/main.rs). Reported, not gated yet.
+    # loadgen/rust/src/main.rs); gates it through `harness_invalid`.
     hl = d.get("harness_lag")
     lag = (
         f" harness_lag={hl['p50_ms']:.1f}/{hl['p99_ms']:.1f}/{hl['p999_ms']:.1f}"
@@ -95,6 +134,10 @@ def main():
     elif cerr > 0:
         gates.append(f"correctness_errors={cerr}")
     verdict = "PASS" if not gates else "FAIL"
+    invalid = harness_invalid(d, gates)
+    if invalid:
+        verdict = "INVALID"
+        gates = [invalid, *gates]
     print(
         f"{sess} {verdict} {';'.join(gates) if gates else 'ok'} | "
         f"partials={p} err={errs} "

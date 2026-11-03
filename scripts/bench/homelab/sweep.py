@@ -13,7 +13,8 @@ find the highest session count that passes the SLO using the tracked harness
 Every point also records:
   * gateway health before/after (a restart or liveness kill during a point
     makes it INVALID; it is re-run once). Cluster-API errors are retried and
-    never count as a restart.
+    never count as a restart. A latency FAIL that eval_slo.py attributes to the
+    loadgen's own send lag (`harness_lag`) is INVALID the same way.
   * CPU from the kubelet's cAdvisor endpoint over the measured window: gateway
     cores and CFS-throttled fraction, loadgen cores/throttling, inference cores.
     A point where the loadgen itself is constrained is flagged `loadgen_bound`.
@@ -272,6 +273,8 @@ class Sweep:
         if (lgt is not None and lgt > 0.02) or (lgc is not None and lgc > 0.85 * self.a.loadgen_cpu):
             rec["loadgen_bound"] = True
         restarted = h0 is None or h1 is None or h1[1] != h0[1]
+        # eval_slo: the latency failure may be the loadgen's own lag, not the gateway's.
+        harness = re.match(rf"^{n} INVALID\b", line) is not None
         # Running out of memory at this load is the gateway failing, not a fluke to retry.
         oom = restarted and h1 is not None and h1[2] == "OOMKilled"
         if oom:
@@ -279,18 +282,19 @@ class Sweep:
             rec["pass"] = False
             ok = False
             restarted = False
-        if restarted:
+        if restarted or harness:
             rec["invalid"] = True
         pts.write(json.dumps(rec) + "\n")
         pts.flush()
         flag = " INVALID(restart/unready)" if restarted else ""
+        flag += " INVALID(harness lag)" if harness else ""
         flag += " LOADGEN-BOUND" if rec.get("loadgen_bound") else ""
         flag += " OOM" if oom else ""
         self.log(f"{key} {line}{flag} | cpu {cpu} restarts {rec['restarts_before']}->{rec['restarts_after']}"
                  f" {rec['last_reason'] or ''}", fh)
-        if restarted and retry:
+        if (restarted or harness) and retry:
             return self.point(key, svc, port, n, fh, pts, retry=False)
-        return None if restarted else ok
+        return None if restarted or harness else ok
 
     # ---- bracket search ------------------------------------------------------
     @staticmethod
