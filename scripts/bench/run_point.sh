@@ -39,6 +39,7 @@
 #                 values; continuity is always checked)
 #   LOADGEN_THREADS  Tokio worker threads (default LOADGEN_CPU). Set explicitly:
 #                 an idle surplus of workers costs CPU the gateway may need.
+#   LOADGEN_ARGS  extra stt-loadgen flags (A/B harness settings only)
 #   LOADGEN_CPUSET   pin the loadgen process to these host CPUs with taskset
 #                 (e.g. 16-31, the E-cores on an i9-13900); default: unpinned
 set -euo pipefail
@@ -62,6 +63,7 @@ LOADGEN_NODE="${LOADGEN_NODE:-}"
 VERIFY_EVERY="${VERIFY_EVERY:-1}"
 LOADGEN_THREADS="${LOADGEN_THREADS:-$LOADGEN_CPU}"
 LOADGEN_CPUSET="${LOADGEN_CPUSET:-}"
+LOADGEN_ARGS="${LOADGEN_ARGS:-}"
 PIN=""
 [ -n "$LOADGEN_CPUSET" ] && PIN="taskset -c ${LOADGEN_CPUSET}"
 NODE_SELECTOR=""
@@ -115,6 +117,7 @@ spec:
                 --session-start-spread-ms ${SPREAD} \
                 --repeat 1 \
                 --verify-every ${VERIFY_EVERY} \
+                ${LOADGEN_ARGS} \
                 --samples-out /results/${PREFIX}.samples.csv \
                 > /results/${PREFIX}.summary.json 2>/results/${PREFIX}.warn.log || true
               if [ -s /results/${PREFIX}.warn.log ]; then

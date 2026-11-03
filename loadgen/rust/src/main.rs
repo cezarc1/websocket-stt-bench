@@ -29,8 +29,8 @@ use tokio::{
     time::{Instant, sleep_until, timeout},
 };
 use tokio_tungstenite::{
-    connect_async,
-    tungstenite::{Error as WsError, Message},
+    connect_async_with_config,
+    tungstenite::{Error as WsError, Message, protocol::WebSocketConfig},
 };
 use tracing::warn;
 use tracing_subscriber::{EnvFilter, fmt};
@@ -78,6 +78,23 @@ struct Args {
     /// `model_delay_ms` every partial must echo (gateway `MODEL_DELAY_MS`).
     #[arg(long, default_value_t = ExpectedConfig::default().model_delay_ms)]
     expect_model_delay_ms: u64,
+    /// WebSocket read buffer per session. tungstenite zero-fills this buffer
+    /// (up to its capacity) before every read attempt, and each session polls
+    /// its reader on every 20 ms send tick; at its 128 KiB default that
+    /// memset dominated loadgen CPU. Partials are well under 4 KiB.
+    #[arg(long, default_value_t = 4096)]
+    read_buffer_bytes: usize,
+    /// Set TCP_NODELAY on each client socket so Nagle never holds back a
+    /// 640-byte frame (that delay would be charged to the gateway).
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    tcp_nodelay: bool,
+}
+
+/// How each session's WebSocket client is configured.
+#[derive(Debug, Clone, Copy)]
+struct ClientConfig {
+    read_buffer_bytes: usize,
+    tcp_nodelay: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -526,6 +543,10 @@ async fn main() -> anyhow::Result<()> {
             + Duration::from_secs(args.measure_secs)
             + Duration::from_secs(args.session_grace_secs),
     };
+    let client = ClientConfig {
+        read_buffer_bytes: args.read_buffer_bytes,
+        tcp_nodelay: args.tcp_nodelay,
+    };
     let harness_lag = Arc::new(Mutex::new(lag_histogram()?));
     let send_block = Arc::new(Mutex::new(lag_histogram()?));
     let (sample_tx, mut sample_rx) = mpsc::channel::<Sample>(8192);
@@ -554,6 +575,7 @@ async fn main() -> anyhow::Result<()> {
                 run_session(
                     session_id,
                     &url,
+                    client,
                     session_start_at,
                     measure_start,
                     end_at,
@@ -677,6 +699,7 @@ async fn main() -> anyhow::Result<()> {
 async fn run_session(
     session_id: usize,
     url: &str,
+    client: ClientConfig,
     session_start_at: Instant,
     measure_start: Instant,
     end_at: Instant,
@@ -695,7 +718,8 @@ async fn run_session(
     let (ws, _) = timed(
         timeouts.connect,
         async {
-            connect_async(url)
+            let config = WebSocketConfig::default().read_buffer_size(client.read_buffer_bytes);
+            connect_async_with_config(url, Some(config), client.tcp_nodelay)
                 .await
                 .with_context(|| format!("connect {url}"))
         },
