@@ -4,7 +4,7 @@
 # LAN. Every pod is pinned to fixed P-core logical CPUs (layout in the inference
 # block): gateway CPUs 0,2, loadgen CPUs 4-11 (8 logical CPUs = 4 P-cores, 8 Tokio
 # workers), inference CPUs 12-15 (3 x 4-CPU replicas sharing those 4 logical
-# CPUs; measured use stays under ~1.3 CPUs). Unpinned, gateways competed with the loadgen for cores 4-11.
+# CPUs; measured use stays under ~1.3 CPUs). Unpinned, gateways competed with the loadgen and inference for CPUs 4-15.
 # Layer on top of your homelab values:
 #   helm upgrade --install stt-bench charts/stt-bench -n stt-bench \
 #     -f <your-homelab-values>.yaml -f charts/stt-bench/values-colocated.yaml
