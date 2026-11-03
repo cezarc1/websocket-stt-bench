@@ -17,11 +17,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sweep import ALL, CTX, NS, Sweep, sh  # noqa: E402
 
 # Host CPU groups on cezar-4090 (i9-13900F): P-core hyperthread pairs 0-15, E-cores 16-31.
-GROUPS = {"P0-3": range(0, 4), "P4-11": range(4, 12), "P12-15": range(12, 16), "E16-31": range(16, 32)}
+GROUPS = {"gw0,2": (0, 2), "P0-3": range(0, 4), "P4-11": range(4, 12), "P12-15": range(12, 16), "E16-31": range(16, 32)}
 
 
 def proc_stat():
-    """Per-CPU busy jiffies from /proc/stat, read in the cpu-sampler pod (host-wide)."""
+    """Per-CPU (busy, total, irq+softirq) jiffies from /proc/stat, read in the cpu-sampler pod (host-wide)."""
     r = sh(["kubectl", "--context", CTX, "-n", NS, "--request-timeout=20s", "exec", "cpu-sampler",
             "--", "cat", "/proc/stat"])
     out = {}
@@ -29,7 +29,7 @@ def proc_stat():
         f = line.split()
         if f and f[0].startswith("cpu") and f[0] != "cpu":
             v = [int(x) for x in f[1:]]
-            out[int(f[0][3:])] = (sum(v) - v[3] - v[4], sum(v))  # busy, total
+            out[int(f[0][3:])] = (sum(v) - v[3] - v[4], sum(v), v[5] + v[6])
     return out
 
 
@@ -48,8 +48,11 @@ class PinSweep(Sweep):
         a, b = self.snaps[-2], self.snaps[-1]
         res = {}
         for g, cpus in GROUPS.items():
-            busy = sum((b[c][0] - a[c][0]) / max(1, b[c][1] - a[c][1]) for c in cpus if c in a and c in b)
+            cpus = [c for c in cpus if c in a and c in b]
+            busy = sum((b[c][0] - a[c][0]) / max(1, b[c][1] - a[c][1]) for c in cpus)
+            irq = sum((b[c][2] - a[c][2]) / max(1, b[c][1] - a[c][1]) for c in cpus)
             res[g] = round(busy, 2)
+            res[g + " irq"] = round(irq, 2)
         return res
 
 

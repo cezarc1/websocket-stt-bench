@@ -1,5 +1,18 @@
 # Go / net-http Benchmark Notes
 
+## 2026-11-02/03 homelab runs (co-located, pinned, correctness-verified)
+
+One k3s node (i9-13900F); gateway pinned to P-cores 0,2 with a 1- or 2-vCPU quota and 4 GiB, loadgen on 4-11 (8 Tokio workers), inference on 12-15. Two independent full passes (run3, run4) after in-cluster conformance on the same images, plus targeted re-runs where listed (run5: C++ 2 vCPU; run6: OCaml 2 vCPU; run7: re-measured with the step-down sweep fix); the README reports the lowest confirmed value. "Confirmed" = every repeat passed (≥2/2) and the next step failed. Raw logs: `results/homelab/` (gitignored).
+
+| Pass | vCPU | Confirmed | First solid fail | Borderline | Fail reason at first solid fail | Gateway cores at that fail |
+|---|---:|---:|---:|---|---|---:|
+| run3 | 1 | **2500** | 2600 | — | `newest_p50=275>200;newest_p95=477>350;oldest_p50=1260>1200` | 1.00 |
+| run4 | 1 | **2500** | 2600 | — | `newest_p50=276>200;newest_p95=503>350;oldest_p50=1260>1200` | 1.00 |
+| run3 | 2 | **3100** | 3200 | — | `newest_p50=203>200;newest_p95=409>350` | 1.41 |
+| run4 | 2 | **3050** | 3100 | — | `newest_p95=360>350` | 1.39 |
+
+At 2 vCPU (`GOMAXPROCS=2`) the gateway fails the newest-p95 gate while using about 1.4 of its 2 cores with no CFS throttling; host `/proc/stat` on cores 0,2 confirms they are not saturated. The cause (scheduler, GC or lock contention) was not isolated.
+
 ## 2026-10-28 homelab re-run (split nodes, correctness-verified)
 
 Split nodes: gateway + loadgen on node `cezar-4090`, one 6-CPU inference replica on node `2080` across the LAN; images tagged `gateway-fixes`. Every measured partial was verified client-side (exact stub values + per-session frame continuity) and `correctness_errors` was 0 on every point below. Same harness (`scripts/bench/run_point.sh`: 10 s warmup, 45 s measured, 30 s ramp, 1000 ms spread) and SLO; confirmed = 2/2 passes. Not directly comparable with the earlier single-node sections below, which are kept as history (see the README note).

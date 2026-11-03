@@ -1,5 +1,23 @@
 # C++23 / uWebSockets Benchmark Notes
 
+## 2026-11-02/03 homelab runs (co-located, pinned, correctness-verified)
+
+One k3s node (i9-13900F); gateway pinned to P-cores 0,2 with a 1- or 2-vCPU quota and 4 GiB, loadgen on 4-11 (8 Tokio workers), inference on 12-15. Two independent full passes (run3, run4) after in-cluster conformance on the same images, plus targeted re-runs where listed (run5: C++ 2 vCPU; run6: OCaml 2 vCPU; run7: re-measured with the step-down sweep fix); the README reports the lowest confirmed value. "Confirmed" = every repeat passed (≥2/2) and the next step failed. Raw logs: `results/homelab/` (gitignored).
+
+| Pass | vCPU | Confirmed | First solid fail | Borderline | Fail reason at first solid fail | Gateway cores at that fail |
+|---|---:|---:|---:|---|---|---:|
+| run3 | 1 | **3800** | 4300 | 4200 (1/2 pass) | `newest_p50=205>200` | 1.00 |
+| run4 | 1 | **3800** | 4300 | 4200 (1/2 pass) | `newest_p50=206>200` | 1.00 |
+| run7a | 1 | **4100** | 4200 | — | `newest_p50=201>200` | 1.00 |
+| run7b | 1 | **4100** | 4200 | — | `newest_p50=201>200` | 1.00 |
+| run3 | 2 | **6300** | 6450 | 6400 (1/2 pass) | `newest_p50=201>200` | 1.99 |
+| run4 | 2 | **5900** | 6000 | — | `newest_p95=677>350;oldest_p95=2595>1650;err_rate=2.88e-05>1e-5` | 1.94 |
+| run5a | 2 | **5900** | 6000 | — | `newest_p50=217>200;newest_p95=359>350` | 1.78 |
+| run5b | 2 | **5700** | 6750 | 6300 (1/2 pass), 6600 (1/2 pass), 6700 (1/2 pass) | `newest_p50=205>200` | 1.95 |
+| run7c | 2 | **5800** | 5900 | 6300 (1/2 pass) | `newest_p50=215>200;newest_p95=382>350;err_rate=1.50e-04>1e-5` | 1.93 |
+
+2 vCPU is not stable to one step: newest p50 sits at about 200 ms (192-231 across sweeps) from 5850 to 6750 sessions, so the 200 ms gate flips on noise; occasional burst failures (gateway memory to 2-2.9 GiB plus error frames) also depress the next points because the sweep does not restart the gateway between points. The README shows the lowest confirmed value. The 1-vCPU passes and one 2-vCPU re-run pre-date a sweep fix (after a failed confirm the sweep jumped back to an older passing probe instead of stepping down one step); run7 re-measured them with the fix.
+
 ## 2026-10-28 homelab re-run (split nodes, correctness-verified)
 
 Split nodes: gateway + loadgen on node `cezar-4090`, one 6-CPU inference replica on node `2080` across the LAN; images tagged `gateway-fixes`. Every measured partial was verified client-side (exact stub values + per-session frame continuity) and `correctness_errors` was 0 on every point below. Same harness (`scripts/bench/run_point.sh`: 10 s warmup, 45 s measured, 30 s ramp, 1000 ms spread) and SLO; confirmed = 2/2 passes. Not directly comparable with the earlier single-node sections below, which are kept as history (see the README note).

@@ -1,9 +1,10 @@
 # Single-node placement for gateway-bound capacity runs on the homelab k3s
 # cluster: the gateway under test, the load generator and the shared
 # inference server all on cezar-4090 (32 CPUs), so no request crosses the
-# LAN. Inference gets 3 x 6-CPU replicas so it stays far below its own
-# saturation point (benchmark it with stt-inferbench before trusting a sweep).
-# CPU budget: inference 18 + loadgen 4 + gateway <= 2 = 24 of 32 cores.
+# LAN. Every pod is pinned to fixed P-cores (layout in the inference block):
+# gateway 0,2, loadgen 4-11 (8 CPUs, 8 Tokio workers), inference 12-15
+# (3 x 4-CPU replicas sharing those 4 cores; measured use stays under ~1.3
+# cores). Unpinned, gateways competed with the loadgen for cores 4-11.
 # Layer on top of your homelab values:
 #   helm upgrade --install stt-bench charts/stt-bench -n stt-bench \
 #     -f <your-homelab-values>.yaml -f charts/stt-bench/values-colocated.yaml
@@ -23,8 +24,7 @@ inferbench:
 
 inference:
   replicas: 3
-  # 3 x 4 CPU leaves room on the node for a 2-vCPU gateway plus a 12-CPU loadgen.
-  # Measured inference use stays under ~1.3 cores even at 5,500 sessions.
+  # Measured inference use stays under ~1.3 cores even at 6,900 sessions.
   # cezar-4090 is an i9-13900F: P-cores are hyperthread pairs (0,1) .. (14,15),
   # E-cores are 16-31. Layout: gateway on one thread of each of the first two
   # P-cores (0,2; siblings 1,3 left idle), loadgen on P-cores 4-11

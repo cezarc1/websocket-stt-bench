@@ -366,9 +366,10 @@ class Sweep:
                 if False not in runs[cand]:
                     confirmed = cand
                     break
-                self.log(f"{key} {cand} borderline {runs[cand]}", fh)
-                lower = [k for k, v in runs.items() if k < cand and v and all(v)]
-                cand = max(lower) if lower else cand - self.step_for(cand)
+                self.log(f"{key} {cand} {'borderline' if any(runs[cand]) else 'fail'} {runs[cand]}", fh)
+                # Step down one step at a time (never jump to an older passing probe), so
+                # the confirmed ceiling always sits one step below an unconfirmed point.
+                cand -= self.step_for(cand - 1)
                 if cand <= 0:
                     break
                 if cand not in runs:

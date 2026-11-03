@@ -11,40 +11,46 @@ Inspired by the [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/b
 
 *Concurrent WebSocket sessions sustained inside the [SLO](#the-slo-what-passing-means):*
 
-| Runtime | 1 vCPU | 2 vCPU | Bottleneck | App LOC | Details |
+![Concurrent sessions by runtime at 1 and 2 vCPU](docs/capacity-by-vcpu.png)
+
+| Runtime | 1 vCPU | 2 vCPU | What fails first | App LOC | Details |
 |---|---:|---:|---|---:|---|
-| **[Rust 1.95](https://github.com/rust-lang/rust) — two `mio`/epoll threads, **no async runtime**** | **3900**¶ | **4400** (1.13X) | newest-p50 latency | 1221 | [runs](services/rust-sync/BENCHMARK.md) |
-| **[Rust 1.95](https://github.com/rust-lang/rust) + async [Axum](https://github.com/tokio-rs/axum) / [Tokio](https://github.com/tokio-rs/tokio)** | **3300** | **5350** (1.62X) | newest-p95 latency | 696 | [runs](services/rust-axum/BENCHMARK.md) |
-| **`oxcaml-epoll` — [OxCaml 5.2.0+ox](https://oxcaml.org/), Linux epoll, no Async** | 3050 | 3000§ (0.98X) | newest-p50 latency | 1.7k | [runs](services/ocaml-oxcaml-epoll/BENCHMARK.md) |
-| **[C++23](https://en.cppreference.com/w/cpp/23) + [uWebSockets 20.77](https://github.com/uNetworking/uWebSockets)** | **3000**◆ | **5900**◆ (1.97X) | newest-p50 latency | 1.6k | [runs](services/cpp23-uwebsockets/BENCHMARK.md) |
-| **[Go 1.26.10](https://go.dev/) + `net/http` / [`coder/websocket`](https://github.com/coder/websocket)** | 2500 | 3900 (1.56X) | latency | 893 | [runs](services/go-nethttp/BENCHMARK.md) |
-| **[TypeScript](https://www.typescriptlang.org/) on [Bun 1.3.13](https://bun.sh/)** | 2400 | n/a | inference connection-reset errors; fetch caveat | 734 | [runs](services/typescript-bun/BENCHMARK.md) |
-| **[Java 25 LTS](https://openjdk.org/projects/jdk/25/) + [Helidon Níma 4.3](https://helidon.io/)** | 2300 | 3600 (1.57X) | connect timeouts, then tail latency | 917 | [runs](services/java-helidon-nima/BENCHMARK.md) |
-| **[OxCaml 5.2.0+ox](https://oxcaml.org/) + Async** | 2100 | 2100§ (1.00X) | CPU, single Async domain | 879 | [runs](services/ocaml-oxcaml/BENCHMARK.md) |
-| **OCaml 5.4.1 + Async** | 1850 | 1850§ (1.00X) | CPU, single Async domain | 850 | [runs](services/ocaml-websocket-async/BENCHMARK.md) |
-| **[Elixir 1.19.5](https://github.com/elixir-lang/elixir) + [Phoenix](https://github.com/phoenixframework/phoenix) / [Bandit](https://github.com/mtrudel/bandit)** | 1250 | 2100 (1.68X) | connect timeouts | 784 | [runs](services/elixir-phoenix/BENCHMARK.md) |
-| **[CPython 3.14.4](https://github.com/python/cpython) + uvloop + FastAPI / Granian** | 1150 | 1500 (1.30X)† | CPU / newest-p50 latency | 678 | [runs](services/python-fastapi/BENCHMARK.md) |
-| **[Scala 3.3 LTS](https://www.scala-lang.org/) + [Apache Pekko 1.6](https://pekko.apache.org/)** | 600 | 1150 (1.92X) | latency, then connect timeouts | 726 | [runs](services/scala-pekko/BENCHMARK.md) |
-| **[CPython 3.14.4t](https://github.com/python/cpython) free-threaded + uvloop + FastAPI / Granian** | 175 | 200 (1.14X) | send/close timeout reliability | 678 | [runs](services/python-fastapi/BENCHMARK.md) |
+| **[Rust 1.95](https://github.com/rust-lang/rust) — two `mio`/epoll threads, **no async runtime**** | **4800** | 5100 (1.06X)¶ | newest-p50 latency | 1221 | [runs](services/rust-sync/BENCHMARK.md) |
+| **[C++23](https://en.cppreference.com/w/cpp/23) + [uWebSockets 20.77](https://github.com/uNetworking/uWebSockets)** | 4100 | **5800**◆ (1.41X) | newest-p50 latency | 1.6k | [runs](services/cpp23-uwebsockets/BENCHMARK.md) |
+| **[Rust 1.95](https://github.com/rust-lang/rust) + async [Axum](https://github.com/tokio-rs/axum) / [Tokio](https://github.com/tokio-rs/tokio)** | 3350 | 5000 (1.49X) | newest-p95 latency | 696 | [runs](services/rust-axum/BENCHMARK.md) |
+| **`oxcaml-epoll` — [OxCaml 5.2.0+ox](https://oxcaml.org/), Linux epoll, no Async** | 3000 | 3000§ (1.00X) | newest-p50 latency | 1.7k | [runs](services/ocaml-oxcaml-epoll/BENCHMARK.md) |
+| **[TypeScript](https://www.typescriptlang.org/) on [Bun 1.3.13](https://bun.sh/)** | 2750 | not measured | inference `fetch` timeouts (not CPU) | 734 | [runs](services/typescript-bun/BENCHMARK.md) |
+| **[Java 25 LTS](https://openjdk.org/projects/jdk/25/) + [Helidon Níma 4.3](https://helidon.io/)** | 2500 | 3900 (1.56X) | tail-latency cliff at 1 vCPU (newest p95 >1.5 s); newest-p95 latency at 2 vCPU | 917 | [runs](services/java-helidon-nima/BENCHMARK.md) |
+| **[Go 1.26.10](https://go.dev/) + `net/http` / [`coder/websocket`](https://github.com/coder/websocket)** | 2500 | 3050 (1.22X)‡ | latency (2 vCPU: newest p95 at ~1.4 cores) | 893 | [runs](services/go-nethttp/BENCHMARK.md) |
+| **[OxCaml 5.2.0+ox](https://oxcaml.org/) + Async** | 2100 | 2025§ (0.96X) | newest-p50 latency, single Async domain | 879 | [runs](services/ocaml-oxcaml/BENCHMARK.md) |
+| **OCaml 5.4.1 + Async** | 1800 | 1850§ (1.03X) | newest-p50 latency, single Async domain | 850 | [runs](services/ocaml-websocket-async/BENCHMARK.md) |
+| **[Elixir 1.19.5](https://github.com/elixir-lang/elixir) + [Phoenix](https://github.com/phoenixframework/phoenix) / [Bandit](https://github.com/mtrudel/bandit)** | 1250 | 2200 (1.76X) | newest-p50 latency | 784 | [runs](services/elixir-phoenix/BENCHMARK.md) |
+| **[CPython 3.15.2](https://github.com/python/cpython) (GIL) + uvloop + FastAPI / Granian** | 1250 | 1900 (1.52X)† | newest-p50 latency | 678 | [runs](services/python-fastapi/BENCHMARK.md) |
+| **[CPython 3.15.2t](https://github.com/python/cpython) free-threaded + uvloop + FastAPI / Granian** | 1250 | 2000 (1.60X)† | newest-p50 latency | 678 | [runs](services/python-fastapi/BENCHMARK.md) |
+| **[Scala 3.3 LTS](https://www.scala-lang.org/) + [Apache Pekko 1.6](https://pekko.apache.org/)** | 1150 | 1850 (1.61X) | newest-p95 latency | 726 | [runs](services/scala-pekko/BENCHMARK.md) |
 
-**How these numbers were measured (2026-10-28 homelab re-run).** Split nodes: the gateway pod (1 vCPU / 2 GiB, or 2 vCPU / 2 GiB, for every runtime) and the loadgen ran on one k3s node, and a single 6-CPU inference replica ran on a second node across the LAN. Every measured partial was verified client-side for exact stub values and per-session sequence continuity, and any correctness error fails the point (every sweep point on the fixed images had zero). All 13 gateways first passed the 7-case in-cluster black-box conformance suite (golden multi-frame output, continuity, session isolation, 1002/1003 including 8193- and 65536-byte frames), run in two batches. The client payload also changed (deterministic, ~3% more inference-server CPU). Harness timings and the latency gates are unchanged from before; new are the correctness gate and once-per-failure error counting (re-scoring every point with the corrected error rule flips no verdicts). "Confirmed" means every repeat at that point passed (at least 2/2), bracketed within one step of the first failure.
+**How these numbers were measured (2026-11-02/03 homelab runs).** Everything ran on one k3s node (i9-13900F), each pod pinned to fixed P-cores: the gateway on 0,2 (one hyperthread on each of two P-cores, with a 1- or 2-vCPU CFS quota and 4 GiB), the Rust load generator on 4-11 (8 CPUs, 8 Tokio workers), and the shared inference server on 12-15 (3 replicas; it never used more than 1.3 cores and was never throttled). Every gateway first passed the 7-case in-cluster black-box conformance suite on the exact images measured. Every measured partial was verified client-side for exact stub values and per-session frame continuity, and any correctness error fails the point. "Confirmed" means every repeat at that point passed (at least 2/2) and the next step up failed. Each table number is the lowest confirmed value across two full, independent passes (run3 and run4) plus targeted re-runs (the OCaml 2-vCPU numbers come from two separate 2-vCPU passes, run6a/b); the passes agreed within one bisection step for every runtime except C++ at 2 vCPU (◆). Four results (C++ 1 vCPU in both passes, Elixir 2 vCPU in run4, one C++ 2-vCPU re-run) were lower bounds because of a sweep bug — after a failed confirmation it fell back to an older passing probe instead of stepping down one step, leaving the next step untested; the bug is fixed and the first three were re-measured twice with the fixed sweep (C++ 1 vCPU 4100/4100, Elixir 2 vCPU 2200/2200, matching run3's 2200). Inference never used more than 1.3 of its cores and was never throttled. The loadgen is close to its 8 cores (≥ 85%, flagged by the sweep) at the top points of rust-sync, async Rust at 2 vCPU and C++ at 2 vCPU; an A/B giving it 10 cores did not move the rust-sync 1-vCPU fail (2/2 still failing), async Rust 2 vCPU passed 5050 either way, C++ 2 vCPU at 6450 got worse, and rust-sync 2 vCPU at 5300 was inconclusive (one pass, one run that produced no result). Elsewhere the loadgen used under half its cores. The gateway was the bottleneck, saturating its CPU quota except where noted (¶ ‡ §, and Bun). Re-tests of a few first-failing points passed (Go 2 vCPU 3200, Bun 2800, async Rust 2 vCPU 5050), so read every ceiling as ±1 step.
 
-These numbers are **not directly comparable** with the earlier single-node runs (inference co-located on the gateway node, 4 replicas), which remain as history in each service's BENCHMARK.md. What moved: C++ 1 vCPU 4350 → 3000 is attributable to the split setup, which costs it about 20% (co-located passed up to 4000 vs 3000-3200 split, single repeats; the previously published image does no better on split nodes). rust-sync 4400 → 3900 is not caused by the code changes (the `main` image on split nodes matches the fixed image: 3900 pass / 4000 fail); co-located, the fixed image also passes 3900 and fails 4400 (single repeats), so the split's share was not bracketed. rust-axum 2 vCPU 4250 → 5350 is not caused by the code changes (`main` on split passes 4250 and 5300). Scala 1400 → 600 is not caused by memory (4 GiB A/B, no restarts) or by the code changes: at 4 GiB the `main` image fails 900-1400 on latency plus errors as the fixed image does (connect timeouts at 1200/1400; at 900 its 142 errors were not timeouts), and at 600 it fails on 283 errors with ~19k of ~27k partials (sessions closed 1003 on TCP-split frames — the bug fixed here). The environmental causes are not isolated, and other shifts were not A/B-tested.
+**Validation.** The harness was checked by mutation testing (13 deliberately broken builds of the Rust gateway — wrong stub values, frame-accounting errors such as dropped or duplicated partials, wrong close codes and start-message handling, a 1% frame drop, +150 ms of added delay — each one failed conformance or the SLO evaluation; the unmodified build passes both) and by latency calibration against a reference gateway with injected delays of 0-300 ms (measured latency within 8 ms of the expected value; latency is measured from scheduled send times, so coordinated omission is accounted for). One known bias: a session's last partial that arrives after the measurement window closes is not counted, which can slightly understate the tail of points that are already failing; it does not move a passing point.
 
-† Python 2 vCPU ran with `GRANIAN_LOOPS=2` / `WORKER_THREADS=2`. The earlier 1750 was reported as two worker processes; whether that shape difference explains the drop to 1500 was not isolated.
-§ A single event loop / Async domain: a 2-vCPU pod doesn't use the second core, so 2 vCPU ≈ 1 vCPU. OxCaml's earlier two-replica fan-out figure (3350) wasn't re-measured.
-¶ No async runtime, zero new dependencies, plain HTTP/1.1. Two OS threads — a `mio`/epoll WebSocket loop + a dedicated inference loop (`std::sync::mpsc` + `mio::Waker`). [runs](services/rust-sync/BENCHMARK.md).
-◆ C++ 1 vCPU: 3000 confirmed (4/4); 3100 (3 pass / 1 fail, newest p50 202 ms) and 3200 (4 pass / 1 fail, newest p50 219 ms) are borderline; 3250 failed its single repeat and 3300 is the first solid fail (2/2). By A/B the split costs C++ about 20% (co-located passed up to 4000 vs 3000-3200 split, single repeats); one hypothesis, not tested, is the LAN hop plus its libcurl HTTP/2 client thread sharing the 1-vCPU quota. C++ 2 vCPU 5900 sits at the single inference replica's measured knee (clean at 6000 rps, saturating at 7000), so treat it as a lower bound that may be inference-limited.
+**What moved since the 2026-10-28 split-node numbers.** Those ran inference on a second node over the LAN with an unpinned gateway; they remain as history in each service's BENCHMARK.md. Two causes were isolated by A/B at the new ceilings: (1) **pinning**: allowed on all CPUs, the gateway mostly ran on the loadgen's and inference's P-cores (host `/proc/stat`: cores 0,2 went idle, the loadgen's cores 4-11 got busier, the E-cores stayed idle except for Scala), so gateway and loadgen competed for the same cores; pinned to 0,2 vs. allowed on all CPUs, rust-sync 4800, Bun 2750, oxcaml-epoll 3000 and Python 3.15 GIL 1250 each passed 2/2 pinned and failed 2/2 unpinned (rust-sync newest p50 196 → 419-469 ms), and Scala 1150, at its own edge, passed 1 of 2 pinned and failed 2/2 unpinned (error frames); (2) **co-locating inference** (no LAN hop), which earlier cost C++ about 20%. Scala's 600 → 1150 is pinning plus its 3 GiB heap: at 1150, pinned, the old 1536 MiB heap / 2 GiB pod failed 2/2 (newest p95 579-601 ms) against 292-475 ms with 3 GiB (which itself passed 1 of 2 there — 1150 is Scala's edge). Python is now CPython 3.15.2/3.15.2t (was 3.14.4/3.14.4t): the free-threaded build's 175 was a Granian lost-wakeup bug fixed in Granian 2.8.7; in run3, measured side by side, 3.14 and 3.15 were within one step of each other with the GIL (1250/1900 both) and 3.15t led 3.14t (1250 vs 1150, 2000 vs 1800).
+
+¶ No async runtime, zero new dependencies, plain HTTP/1.1. Two OS threads — a `mio`/epoll WebSocket loop + a dedicated inference loop (`std::sync::mpsc` + `mio::Waker`). The design cannot use more than about 1.14 cores, so 2 vCPU barely helps (run3 5100, run4 5200).
+◆ C++ 2 vCPU is not stable to one step: valid sweeps confirmed 6300, 5900, 5900 and 5800 (a fifth, 5700, had the sweep bug above and is only a lower bound; single points passed up to 6700). Its first gate, newest p50 ≤ 200 ms, hovers around 200 ms (192-231 ms across sweeps) everywhere from 5850 to 6750 sessions, so noise moves the ceiling; occasional burst failures (gateway memory to 2-2.9 GiB plus error frames) also depress the next points, because the sweep doesn't restart the gateway between points. The lowest is shown; read it as 5800-6300.
+‡ Go at 2 vCPU fails the newest-p95 gate while using about 1.4 of its 2 cores, with no CPU throttling; host-side `/proc/stat` on cores 0 and 2 confirms they are not saturated. The cause (scheduler, GC or lock contention) was not isolated.
+§ A single event loop / Async domain: a 2-vCPU pod can't use the second core (each used exactly 1.00 core at its first failing point), so 2 vCPU ≈ 1 vCPU. Measured in two separate 2-vCPU passes (run6a/b), which agreed within one step.
+† Python 2 vCPU runs `GRANIAN_LOOPS=2` / `WORKER_THREADS=2`.
+Bun at 1 vCPU uses about 0.8 of its core; it fails abruptly at 2800-2900 when its `fetch` client starts timing out on inference requests (at 2900 in run3: 12,843 timeouts and 1,163 connection resets, plus 1,085 sessions whose final frames were never reported, while inference was idle at 0.4 cores), not on CPU.
 
 LOC note: the TL;DR and chart use LOC. For OCaml raw-transport variants, that excludes the generic first-party WebSocket/HTTP/SHA-1/base64/masking transport shim that package-backed runtimes get from dependencies. Comments and blank lines are not counted.
 
-The above numbers are the highest confirmed session counts that passed the SLO at the given vCPU shape. Detailed brackets, tables, and run notes live in the linked service benchmark docs.
+Detailed brackets, tables, and run notes live in the linked service benchmark docs; raw logs are under `results/homelab/` (gitignored) and the tracked harness is `scripts/bench/homelab/`.
 
-**Hardware:** Intel Core i9-13900F, Ubuntu 24.04.3, k3s v1.35.4.
+**Hardware:** Intel Core i9-13900F (8 P-cores with hyperthreading + 16 E-cores), 64 GiB, Ubuntu 24.04.3, k3s v1.35.4.
 
 ## Takeaways
 
-*Written against the earlier single-node runs; the figures quoted below are those runs' numbers. On the 2026-10-28 split-node re-run, rust-sync still leads, async Rust now edges C++ at 1 vCPU (C++ loses about 20% to the split, see ◆), Go/Bun/Java reorder, and Scala drops (cause not isolated).*
+*Written against the earlier single-node runs; the figures quoted below are those runs' numbers. On the 2026-11 pinned, co-located runs: rust-sync leads at 1 vCPU (4800) and C++ at 2 vCPU (5800-6300); async Rust is third; Bun moves ahead of Java and Go at 1 vCPU; Scala recovers to 1150 / 1850 (pinning plus heap) and now fails on newest-p95 latency with zero errors, so its connect-timeout caveat is gone; OxCaml/Async is at 2100; and free-threaded Python 3.15t is no longer reliability-limited — it ties the GIL build at 1 vCPU and edges it at 2.*
 
 - The biggest surprise: the per-vCPU leader is **Rust **, specifically a two-thread `mio`/epoll build (one WebSocket loop, one inference loop, plain HTTP/1.1, zero extra deps) at 4400 sessions/vCPU, just past C++ (4350).
 - Async Rust is still the best *balance*: @ 696 LOC and 3475 sessions/vCPU, the leanest of the high-capacity tier even though raw-capacity now goes to the no-runtime Rust build. Both Claude Opus (max) and GPT 4.5 (xhigh) had no issue writing Rust.
@@ -57,7 +63,7 @@ The above numbers are the highest confirmed session counts that passed the SLO a
 - Free-threaded Python with this FastAPI/Granian stack has issues; TODO: investigate this.
 - Some languages/runtimes were easier to prompt for than others. Rust and Python took me one or two prompts. C++ needed me to take over and repeatedly steer towards C++ concepts I have long forgotten (RAII, move semantics, etc); OxCaml was easy but building was downright painful (30m or so to build, OxCaml desperately needs better tooling like pre-built docker images).
 
-**Pareto frontier (2026-10-28 numbers):** Python (678 LOC / 1150 sessions, leanest) · Async Rust/Tokio (696 LOC / 3300, best balance) · Rust/`mio` no-runtime (1221 LOC / 3900, most capacity). C++23 (1551 LOC / 3000) is dominated in this split-node run; with inference co-located it was already dominated by the no-runtime Rust build.
+**Pareto frontier (1 vCPU, 2026-11 numbers):** Python 3.15 GIL and free-threaded (678 LOC / 1250 sessions, leanest) · Async Rust/Tokio (696 LOC / 3350, best balance) · Rust/`mio` no-runtime (1221 LOC / 4800, most capacity). C++23 (1551 LOC / 4100) is dominated by the no-runtime Rust build at 1 vCPU, but has the highest 2-vCPU ceiling.
 
 ## The SLO: what "passing" means
 
@@ -135,17 +141,17 @@ The load-bearing invariant is one in-flight inference request per connection. Ev
 
 | If you optimize for | Pick | Why |
 |---|---|---|
-| Lowest dollars per session | Rust/`mio` (no runtime) | 3900 sessions/vCPU, memory-safe, no async runtime — beats C++ |
-| Leanest of the high-capacity tier | Async Rust/Axum | 3300 sessions/vCPU in 696 LOC |
-| Maximum capacity in C++ | C++23/uWebSockets | 3000 sessions/vCPU split-node, 3100-3200 borderline (single-repeat A/B passed 4000 with inference co-located); best measured 2-vCPU (5900, inference-limited lower bound) |
-| Rust-adjacent JVM capacity | Java/Helidon Níma | 2300 sessions/vCPU; edge fails on connect timeouts |
-| Above-Java OxCaml capacity | `oxcaml-epoll` | 3050 sessions/vCPU; separate no-Async variant, newest-p50 latency edge at 3100 |
-| JS ecosystem with strong capacity | TypeScript on Bun | 2400 sessions/vCPU on native Bun primitives |
+| Lowest dollars per session (1 vCPU) | Rust/`mio` (no runtime) | 4800 sessions/vCPU, memory-safe, no async runtime — beats C++ (4100) |
+| Leanest of the high-capacity tier | Async Rust/Axum | 3350 sessions/vCPU in 696 LOC; 5000 at 2 vCPU |
+| Most sessions per pod at 2 vCPU | C++23/uWebSockets | 5800-6300 at 2 vCPU (the highest), 4100 at 1 vCPU |
+| Rust-adjacent JVM capacity | Java/Helidon Níma | 2500 sessions/vCPU, 3900 at 2 vCPU; past the edge, tail latency collapses |
+| Above-Java OxCaml capacity | `oxcaml-epoll` | 3000 sessions/vCPU; separate no-Async variant, newest-p50 latency edge at 3100 |
+| JS ecosystem with strong capacity | TypeScript on Bun | 2750 sessions/vCPU on native Bun primitives; its `fetch` client is the limit |
 | Go operational simplicity | Go/net-http | 2500 sessions/vCPU and explicit h2c transport |
-| Vertical multi-core scale-up | Scala / Elixir / C++ | 1.92X / 1.68X / 1.97X lift 1→2 vCPU; Scala's is the largest whose 2-vCPU point is not at the inference knee (C++'s 5900 is an inference-limited lower bound) |
+| Vertical multi-core scale-up | Elixir / Scala / Python 3.15t | 1.76X / 1.61X / 1.60X lift 1→2 vCPU (C++ 1.41X-1.54X, async Rust 1.49X) |
 | Modeling invariants as types | OxCaml | opaque inflight capability, still runtime-enforced |
 | Upstream OCaml without OxCaml | Stock OCaml/Async raw transport | within about 7% of the earlier OxCaml raw-transport baseline once transport is held roughly constant |
-| Free-threaded Python | wait | this stack is reliability-limited |
+| Free-threaded Python | CPython 3.15.2t | ties the 3.15.2 GIL build at 1 vCPU (1250) and edges it at 2 vCPU (2000 vs 1900) |
 
 My hot-take? If you're at a startup, start with async Python, iterate and once you need to do some cost savings, either commit to a full, coding agent driven, Rust rewrite, or swap out the bottlenck components via Rust-based cPython extension modules (serialization, websockets, etc). Else, just start in Rust. Yes, the hype is real!
 
@@ -173,8 +179,8 @@ just analyze-results <input-dir> <output-dir>
 
 - **Load generator:** `loadgen/rust/`, `tokio-tungstenite`, HDR histograms, strict `partial` validation.
 - **k3s node:** Intel Core i9-13900F, 32 logical CPUs, 64 GiB RAM, Ubuntu 24.04.3, k3s v1.35.4.
-- **2026-10-28 re-run:** gateway + loadgen on that node; the shared inference server (one 6-CPU replica) on a second 8-CPU k3s node, reached over the LAN.
-- **Scheduling caveat:** Kubernetes CPU requests/limits are CFS quota, not CPU affinity; edge points can move with P/E-core migration on this hybrid CPU. Repeats and raw sample CSVs are the evidence.
+- **2026-11 runs:** gateway, loadgen and inference all on that node, each pinned to fixed P-cores (gateway 0,2; loadgen 4-11; inference 12-15) by `taskset` (a `cpu-pin` sidecar for gateways); placement in `charts/stt-bench/values-colocated.yaml`, sweeps via `scripts/bench/homelab/full-pass.sh`.
+- **Scheduling caveat:** Kubernetes CPU limits are CFS quota, not affinity. On this hybrid CPU an unpinned gateway competes with the loadgen and inference for their P-cores; the unpinned co-located pass (run2) came in up to 21% lower, and the A/B above flips ceilings from pass to fail, so the pinning is part of the setup, not an optimization. Repeats and raw sample CSVs are the evidence.
 - **Pinned versions:** `versions.lock.toml`.
 
 ## Known gaps

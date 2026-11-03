@@ -1,5 +1,18 @@
 # OCaml / OxCaml Benchmark Notes
 
+## 2026-11-02/03 homelab runs (co-located, pinned, correctness-verified)
+
+One k3s node (i9-13900F); gateway pinned to P-cores 0,2 with a 1- or 2-vCPU quota and 4 GiB, loadgen on 4-11 (8 Tokio workers), inference on 12-15. Two independent full passes (run3, run4) after in-cluster conformance on the same images, plus targeted re-runs where listed (run5: C++ 2 vCPU; run6: OCaml 2 vCPU; run7: re-measured with the step-down sweep fix); the README reports the lowest confirmed value. "Confirmed" = every repeat passed (≥2/2) and the next step failed. Raw logs: `results/homelab/` (gitignored).
+
+| Pass | vCPU | Confirmed | First solid fail | Borderline | Fail reason at first solid fail | Gateway cores at that fail |
+|---|---:|---:|---:|---|---|---:|
+| run3 | 1 | **2100** | 2200 | — | `newest_p50=225>200;oldest_p50=1206>1200` | 1.00 |
+| run4 | 1 | **2100** | 2200 | — | `newest_p50=230>200;oldest_p50=1211>1200` | 1.00 |
+| run6a | 2 | **2100** | 2200 | — | `newest_p50=225>200;oldest_p50=1205>1200` | 1.00 |
+| run6b | 2 | **2025** | 2100 | — | `newest_p50=219>200;oldest_p50=1200>1200` | 1.00 |
+
+Single Async domain: at 2 vCPU the gateway uses exactly 1.00 core at its first failing point, so 2 vCPU ≈ 1 vCPU.
+
 ## 2026-10-28 homelab re-run (split nodes, correctness-verified)
 
 Split nodes: gateway + loadgen on node `cezar-4090`, one 6-CPU inference replica on node `2080` across the LAN; images tagged `gateway-fixes`. Every measured partial was verified client-side (exact stub values + per-session frame continuity) and `correctness_errors` was 0 on every point below. Same harness (`scripts/bench/run_point.sh`: 10 s warmup, 45 s measured, 30 s ramp, 1000 ms spread) and SLO; confirmed = 2/2 passes. Not directly comparable with the earlier single-node sections below, which are kept as history (see the README note).
