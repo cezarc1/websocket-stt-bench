@@ -2,7 +2,7 @@
 
 Measures throughput of N concurrent ThreadPoolExecutor workers each
 running compute_stub on a fixed set of frames. Run twice — once under
-the default 3.14t (no GIL), once with `python -X gil=1` — to A/B the
+the default 3.15.2t (no GIL), once with `python -X gil=1` — to A/B the
 no-GIL build's headline feature on this exact workload.
 
 Run via:

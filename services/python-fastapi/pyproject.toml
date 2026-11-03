@@ -1,33 +1,52 @@
+# CPython 3.15.2t / 3.15.2 gateway (images python-fastapi-ft315 / -gil315).
+# Container-only: the interpreters come from the pinned manylinux image, so
+# `just python-check` runs ruff + ty + pytest in the Dockerfile's `test` stage.
+#
+# Pins: the lowest stable release that ships cp315 AND cp315t manylinux wheels
+# (or is pure Python). frozenlist has no cp315 wheel in any release, so it
+# installs its pure-Python wheel (aiohttp only uses it for signal lists, off
+# the request path).
 [project]
 name = "stt-fastapi-gateway"
 version = "0.1.0"
 description = "FastAPI implementation for websocket-stt-bench"
-requires-python = "==3.14.4"
+requires-python = "==3.15.2"
 dependencies = [
-    "aiohttp==3.13.5",
+    "aiohttp==3.14.4",
     "fastapi==0.136.1",
     "granian[uvloop,rloop]==2.8.7",
-    "pydantic==2.13.3",
+    "pydantic==2.14.0",
     "wsproto==1.3.2",
 ]
 
+# pyperf is left out: its psutil dependency has no cp315t wheel in any release.
 [dependency-groups]
 dev = [
     "ruff==0.15.12",
     "ty==0.0.31",
     "pytest==8.4.2",
-    "pyperf==2.10.0",
-    "numpy==2.4.4",
+    "numpy==2.5.2",
 ]
 
 [tool.uv]
 required-version = "==0.11.7"
 python-preference = "only-system"
 python-downloads = "never"
+# Wheels only: a missing cp315/cp315t wheel must fail the image build rather
+# than silently compile from an sdist with unpinned build dependencies.
+no-build = true
+# Compiled transitive deps pinned to the first releases with cp315 wheels.
+constraint-dependencies = [
+    "multidict==6.8.0",
+    "propcache==0.5.3",
+    "yarl==1.25.1",
+    "uvloop==0.23.0",
+    "rloop==0.3.0",
+]
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
+target-version = "py315"
 
 [tool.ruff.lint]
 # Defaults (E4, E7, E9, F) plus a curated set of higher-value rule families.

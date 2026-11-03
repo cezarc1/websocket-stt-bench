@@ -156,44 +156,8 @@ gateways:
       limits:
         cpu: "2"
         memory: 4Gi
-  pythonFt:
-    enabled: true
-    name: stt-python-fastapi-ft-gateway
-    image: python-fastapi-ft
-    replicas: 0
-    port: 8000
-    env:
-      WORKER_THREADS: "2"
-      GRANIAN_LOOPS: "2"
-    resources:
-      requests:
-        cpu: "2"
-        memory: 4Gi
-      limits:
-        cpu: "2"
-        memory: 4Gi
-  pythonGil:
-    enabled: true
-    name: stt-python-fastapi-gil-gateway
-    image: python-fastapi-gil
-    replicas: 0
-    port: 8000
-    env:
-      WORKER_THREADS: "1"
-      PY_VARIANT: gil
-      GRANIAN_LOOP_KIND: uvloop
-      GRANIAN_TASK_IMPL: asyncio
-      GRANIAN_RUNTIME_THREADS: ""
-    resources:
-      requests:
-        cpu: "1"
-        memory: 4Gi
-      limits:
-        cpu: "1"
-        memory: 4Gi
-  # CPython 3.15.2t / 3.15.2 builds of the same gateway code; shapes mirror
-  # pythonFt / pythonGil exactly so only the interpreter (and the deps that
-  # needed cp315 wheels, see services/python-fastapi/py315) differ.
+  # CPython 3.15.2t (free-threading, 2 vCPU mt) and 3.15.2 (GIL, 1 vCPU st)
+  # builds of the same gateway code.
   pythonFt315:
     enabled: true
     name: stt-python-fastapi-ft315-gateway
@@ -490,17 +454,17 @@ loadgen:
       sessions: 1250
       outputPrefix: elixir-phoenix-1vcpu-1250
       suspend: true
-    - name: python-ft-180
-      gateway: pythonFt
-      serviceName: python-fastapi-ft-1vcpu-k8s
-      sessions: 180
-      outputPrefix: python-fastapi-ft-1vcpu-180
+    - name: python-ft315-1000
+      gateway: pythonFt315
+      serviceName: python-fastapi-ft315-1vcpu-k8s
+      sessions: 1000
+      outputPrefix: python-fastapi-ft315-1vcpu-1000
       suspend: true
-    - name: python-gil-1100
-      gateway: pythonGil
-      serviceName: python-fastapi-gil-1vcpu-k8s
-      sessions: 1100
-      outputPrefix: python-fastapi-gil-1vcpu-1100
+    - name: python-gil315-1000
+      gateway: pythonGil315
+      serviceName: python-fastapi-gil315-1vcpu-k8s
+      sessions: 1000
+      outputPrefix: python-fastapi-gil315-1vcpu-1000
       suspend: true
     - name: typescript-bun-2500
       gateway: typescriptBun

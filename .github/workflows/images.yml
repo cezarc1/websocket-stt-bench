@@ -66,8 +66,6 @@ on:
           - rust-axum
           - rust-sync
           - elixir-phoenix
-          - python-fastapi-ft
-          - python-fastapi-gil
           - python-fastapi-ft315
           - python-fastapi-gil315
           - typescript-bun
@@ -108,22 +106,6 @@ jobs:
           - image: elixir-phoenix
             dockerfile: docker/elixir-phoenix.Dockerfile
             build_args: ""
-          - image: python-fastapi-ft
-            dockerfile: docker/python-fastapi.Dockerfile
-            build_args: |
-              PYTHON_FT_IMAGE=quay.io/pypa/manylinux_2_28_x86_64@sha256:09c9455c6285345727a9caf9b8166cbcb7afab8594cb94412d5e67c539940851
-              UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
-              UV_VERSION=0.11.7
-          - image: python-fastapi-gil
-            dockerfile: docker/python-fastapi.Dockerfile
-            build_args: |
-              PYTHON_FT_IMAGE=quay.io/pypa/manylinux_2_28_x86_64@sha256:09c9455c6285345727a9caf9b8166cbcb7afab8594cb94412d5e67c539940851
-              UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
-              UV_VERSION=0.11.7
-              PY_VARIANT=gil
-              PY_DIR=cp314-cp314
-              PY_EXE=python3.14
-              PY_GIL_DISABLED_EXPECTED=0
           - image: python-fastapi-ft315
             dockerfile: docker/python-fastapi.Dockerfile
             build_args: |
@@ -133,7 +115,6 @@ jobs:
               PY_DIR=cp315-cp315t
               PY_EXE=python3.15t
               PY_VERSION_EXPECTED=3.15.2
-              PY_PROJECT_DIR=services/python-fastapi/py315
           - image: python-fastapi-gil315
             dockerfile: docker/python-fastapi.Dockerfile
             build_args: |
@@ -145,7 +126,6 @@ jobs:
               PY_EXE=python3.15
               PY_GIL_DISABLED_EXPECTED=0
               PY_VERSION_EXPECTED=3.15.2
-              PY_PROJECT_DIR=services/python-fastapi/py315
           - image: typescript-bun
             dockerfile: docker/typescript-bun.Dockerfile
             build_args: |

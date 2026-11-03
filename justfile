@@ -47,11 +47,10 @@ ensure-oxcaml-switch: ensure-opam
 ensure-stock-ocaml-switch: ensure-opam
     bash scripts/ensure-stock-ocaml-switch.sh
 
-py-lock: ensure-uv
-    bash scripts/py-sync.sh lock
-
-py-sync: ensure-uv
-    bash scripts/py-sync.sh sync
+# Python gateway (CPython 3.15.2t / 3.15.2): the pinned interpreters are
+# container-only, so locking and the gate run in Docker.
+py-lock:
+    bash scripts/python-docker.sh lock
 
 analysis-lock: ensure-uv
     cd analysis && ../.tools/bin/uv lock
@@ -67,17 +66,9 @@ analysis-check: analysis-sync analysis-test
     cd analysis && ../.tools/bin/uv run ruff check .
     cd analysis && ../.tools/bin/uv run ty check
 
-py-test: py-sync
-    cd services/python-fastapi && PYTHONPATH=. ../../.tools/bin/uv run pytest tests/ -q
-
-python-check: py-sync py-test
-    cd services/python-fastapi && ../../.tools/bin/uv run ruff format --check .
-    cd services/python-fastapi && ../../.tools/bin/uv run ruff check .
-    cd services/python-fastapi && ../../.tools/bin/uv run ty check
-
-# CPython 3.15.2t / 3.15.2 lane (container-only interpreters): pytest + ty in Docker.
-python315-check:
-    bash scripts/py315-check.sh
+# ruff format --check, ruff check, ty, pytest for 3.15.2t and 3.15.2 (Docker).
+python-check:
+    bash scripts/python-docker.sh check
 
 ts-install: ensure-bun
     cd services/typescript-bun && PATH="$PWD/../../.tools/bin:$PATH" ../../.tools/bin/bun install --frozen-lockfile
@@ -132,14 +123,8 @@ scala-test: ensure-jdk ensure-sbt
 scala-lock: ensure-jdk ensure-sbt
     cd services/scala-pekko && JAVA_HOME="$PWD/../../.tools/jdk-$(awk -F\" '/java_jdk =/{print $2; exit}' ../../versions.lock.toml)" ../../.tools/bin/sbt -batch update
 
-py-bench: py-sync
-    mkdir -p results
-    cd services/python-fastapi && PYTHONPATH=. ../../.tools/bin/uv run python tests/bench_stub.py -o ../../results/python-bench-stub.json
-
-py-bench-threading: py-sync
-    mkdir -p results
-    cd services/python-fastapi && PYTHONPATH=. ../../.tools/bin/uv run python -X gil=0 tests/bench_threading.py | tee ../../results/python-bench-threading-nogil.txt
-    cd services/python-fastapi && PYTHONPATH=. ../../.tools/bin/uv run python -X gil=1 tests/bench_threading.py | tee ../../results/python-bench-threading-gil.txt
+py-bench-threading:
+    bash scripts/python-docker.sh bench-threading
 
 elixir-deps:
     cd services/elixir-phoenix && mix deps.get --locked

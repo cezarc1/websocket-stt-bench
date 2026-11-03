@@ -6,10 +6,10 @@ This repo benchmarks streaming STT gateways behind one WebSocket protocol. Root 
 
 ## Build, Test, and Development Commands
 
-- `just doctor`: install pinned local `uv`, Bun, and Go, then verify Python, Elixir/OTP, Rust, Docker, and cargo plugin versions.
-- `just py-sync`: sync the FastAPI virtualenv from `uv.lock`.
+- `just doctor`: install pinned local `uv`, Bun, and Go, then verify Elixir/OTP, Rust, Docker, cargo plugin versions, and Python pin consistency (Python itself is container-only).
+- `just py-lock`: regenerate the FastAPI `uv.lock` inside the pinned CPython 3.15.2t image.
 - `just check`: run the full gate across doctor, Python, TypeScript/Bun, Go, Elixir, and Rust checks.
-- `just python-check`, `just ts-check`, `just go-check`, `just elixir-check`, `just rust-check`, `just ocaml-check`: run focused validation while iterating. `ocaml-check` requires the OxCaml switch — `just ensure-oxcaml-switch` (slow first run: ~15-20 min to build the OxCaml compiler from source).
+- `just python-check` (ruff, ty and pytest in Docker for 3.15.2t and 3.15.2), `just ts-check`, `just go-check`, `just elixir-check`, `just rust-check`, `just ocaml-check`: run focused validation while iterating. `ocaml-check` requires the OxCaml switch — `just ensure-oxcaml-switch` (slow first run: ~15-20 min to build the OxCaml compiler from source).
 - `just compose-build`, `just compose-single`, `just compose-multi`: build and run Docker services.
 - `just conformance`: build images, start the single-profile services, and run the black-box WebSocket protocol conformance suite from the loadgen image.
 - `just bench-ladder rust-axum-single ws://127.0.0.1:3000/ws/stt`: run the load ladder and write paired summary JSON and raw sample CSV files to `results/`.
@@ -31,7 +31,7 @@ Adding or re-measuring a gateway follows a fixed, reproducible procedure — see
 
 ## Coding Style & Naming Conventions
 
-Keep pinned versions in `versions.lock.toml`. Rust uses edition 2024, `rustfmt`, and `cargo clippy -- -D warnings`; prefer snake_case modules, functions, and fields. Go uses `gofumpt`, `goimports`, `go vet`, `golangci-lint`, `govulncheck`, and idiomatic package-local tests. Python targets CPython 3.14 free-threading, Ruff with 100-character lines, and typed async WebSocket code. Elixir uses `mix format`, Credo strict mode, Dialyzer, and `SttGateway.*` module names. Do not commit `.tools/`, `target/`, `.venv/`, `_build/`, `deps/`, `results/` outputs, logs, dumps, or `__pycache__/`.
+Keep pinned versions in `versions.lock.toml`. Rust uses edition 2024, `rustfmt`, and `cargo clippy -- -D warnings`; prefer snake_case modules, functions, and fields. Go uses `gofumpt`, `goimports`, `go vet`, `golangci-lint`, `govulncheck`, and idiomatic package-local tests. Python targets CPython 3.15.2 (free-threading 3.15.2t plus a GIL build), Ruff with 100-character lines, and typed async WebSocket code. Elixir uses `mix format`, Credo strict mode, Dialyzer, and `SttGateway.*` module names. Do not commit `.tools/`, `target/`, `.venv/`, `_build/`, `deps/`, `results/` outputs, logs, dumps, or `__pycache__/`.
 
 ## Testing & Agent Self-Verification
 

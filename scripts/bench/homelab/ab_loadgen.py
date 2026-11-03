@@ -3,7 +3,8 @@
 
 Isolates the loadgen from everything else: same gateway pod, same session
 count, same inference; only the loadgen shape changes between points. A shape
-is CPUS[:THREADS[:CPUSET]] (CPUSET = taskset list; empty = unpinned).
+is CPUS[:THREADS[:CPUSET[:VERIFY_EVERY]]] (CPUSET = taskset list; empty =
+unpinned; VERIFY_EVERY defaults to 1).
   scripts/bench/homelab/ab_loadgen.py --out results/homelab/ab-loadgen \
       --shapes 8,16:16:16-31 --rounds 2 rustSync:3800 cpp23UWebsockets:3650
 """
@@ -59,15 +60,16 @@ def main():
     p.add_argument("--image-tag", default="colocated-rerun")
     p.add_argument("--shapes", default="8,12")
     p.add_argument("--rounds", type=int, default=2)
+    p.add_argument("--loadgen-tag", default=None, help="loadgen image tag (default: --image-tag)")
     p.add_argument("--gw-variant", action="append", default=[],
                    help="extra chart --set entries for the gateway, ';'-separated; repeat to A/B "
                         "gateway configs (each round redeploys the gateway per variant)")
     p.add_argument("points", nargs="+", help="key:sessions")
     a = p.parse_args()
-    a.loadgen_tag, a.verify_every, a.loadgen_cpu = None, 1, 0
+    a.verify_every, a.loadgen_cpu = 1, 0
     a.loadgen_threads, a.loadgen_cpuset = None, None
     sw = PinSweep(a)
-    shapes = [(sh.split(":") + ["", ""])[:3] for sh in a.shapes.split(",")]
+    shapes = [(sh.split(":") + ["", "", ""])[:4] for sh in a.shapes.split(",")]
     for spec in a.points:
         key, n = spec.split(":")
         n = int(n)
@@ -84,9 +86,11 @@ def main():
                         sw.helm(chart_key, 1, extra + v)
                         sw.wait_ready(svc)
                         time.sleep(10)
-                    for c, t, cs in shapes:
+                    for c, t, cs, ve in shapes:
                         sw.a.loadgen_cpu, sw.a.loadgen_threads, sw.a.loadgen_cpuset = int(c), int(t or c), cs
-                        sw.log(f"{key} {n} gw={v or '-'} loadgen cpu={c} threads={t or c} cpuset={cs or '-'}", fh)
+                        sw.a.verify_every = int(ve or 1)
+                        sw.log(f"{key} {n} gw={v or '-'} loadgen cpu={c} threads={t or c} cpuset={cs or '-'} "
+                               f"verify_every={sw.a.verify_every}", fh)
                         sw.point(key, svc, port, n, fh, pts)
                         sw.log(f"{key} {n} busy host CPUs by group {sw.groups()}", fh)
                     # Keep the gateway's own log (e.g. GC logs) before it is redeployed.

@@ -78,7 +78,7 @@ gateways:
       limits:
         cpu: "2"
         memory: 4Gi
-  pythonFt:
+  pythonFt315:
     replicas: 0
     resources:
       requests:
@@ -87,7 +87,7 @@ gateways:
       limits:
         cpu: "2"
         memory: 4Gi
-  pythonGil:
+  pythonGil315:
     replicas: 0
     resources:
       requests:

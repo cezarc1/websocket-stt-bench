@@ -1,26 +1,23 @@
-ARG PYTHON_FT_IMAGE=quay.io/pypa/manylinux_2_28_aarch64@sha256:c269bed3fc0ba21aac08ff67bf1d657d4967a9c0582fc8880a0e302f8ca78bdd
+ARG PYTHON_FT_IMAGE=quay.io/pypa/manylinux_2_28_aarch64@sha256:54b271d9562a3686298880df05367909e949ed317e7b1b79b59c696d75f78676
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
 
-# PY_VARIANT selects between the free-threaded build (default, "ft") and the
-# GIL-enabled build ("gil"). The manylinux base ships both /opt/python/cp314-cp314t
-# (FT) and /opt/python/cp314-cp314 (regular). Compose passes the gil trio for
-# the experimental python-fastapi-stock-gil-single service.
-#
-# CPython 3.15 images run the same app code with PY_VERSION_EXPECTED=3.15.2,
-# PY_DIR=cp315-cp315[t], PY_PROJECT_DIR=services/python-fastapi/py315 (its own
-# pyproject + uv.lock) and a newer manylinux digest (each manylinux image ships
-# only the latest patch of each CPython, so the 3.14.4 digest stays pinned for
-# the 3.14 images). Both are pinned in versions.lock.toml.
+# CPython 3.15.2 gateway. PY_VARIANT selects between the free-threaded build
+# (default, "ft": /opt/python/cp315-cp315t, image python-fastapi-ft315) and the
+# GIL-enabled build ("gil": /opt/python/cp315-cp315, image python-fastapi-gil315)
+# shipped in the same manylinux base. Interpreter version and digests are
+# pinned in versions.lock.toml [python] / [containers.python]; PYTHON_FT_IMAGE
+# is the base for both variants.
 ARG PY_VARIANT=ft
-ARG PY_DIR=cp314-cp314t
-ARG PY_EXE=python3.14t
+ARG PY_DIR=cp315-cp315t
+ARG PY_EXE=python3.15t
 ARG PY_GIL_DISABLED_EXPECTED=1
-ARG PY_VERSION_EXPECTED=3.14.4
-ARG PY_PROJECT_DIR=services/python-fastapi
+ARG PY_VERSION_EXPECTED=3.15.2
 
 FROM ${UV_IMAGE} AS uv-bin
 
-FROM ${PYTHON_FT_IMAGE} AS app-build
+# Interpreter + pinned uv, no project files: `just py-lock` runs `uv lock`
+# in this stage with services/python-fastapi mounted.
+FROM ${PYTHON_FT_IMAGE} AS toolchain
 
 ARG UV_VERSION=0.11.7
 ARG PY_VARIANT
@@ -28,7 +25,6 @@ ARG PY_DIR
 ARG PY_EXE
 ARG PY_GIL_DISABLED_EXPECTED
 ARG PY_VERSION_EXPECTED
-ARG PY_PROJECT_DIR
 
 ENV PATH="/opt/python/${PY_DIR}/bin:/opt/uv:${PATH}" \
     UV_COMPILE_BYTECODE=1 \
@@ -78,21 +74,24 @@ RUN mkdir -p /opt/python-runtime-libs \
     /lib64/libzstd.so.1 \
     /opt/python-runtime-libs/
 
+FROM toolchain AS app-build
 WORKDIR /app
-COPY ${PY_PROJECT_DIR}/pyproject.toml ${PY_PROJECT_DIR}/uv.lock ./
+COPY services/python-fastapi/pyproject.toml services/python-fastapi/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
   uv sync --locked --no-dev --no-install-project
 
-# `--target test`: pytest + ty on this image's interpreter and lock (how
-# `just python315-check` covers the 3.15 lane; `just python-check` covers
-# 3.14.4t natively). Not part of the default (runtime) target.
+# `--target test`: the full Python gate (ruff format --check, ruff check,
+# ty, pytest) on this image's interpreter and lock; `just python-check` builds
+# it for both variants. Not part of the default (runtime) target.
 FROM app-build AS test
 RUN --mount=type=cache,target=/root/.cache/uv \
   uv sync --locked --no-install-project
 COPY services/python-fastapi/app ./app
 COPY services/python-fastapi/tests ./tests
-RUN PYTHONPATH=. .venv/bin/pytest tests -q \
-  && .venv/bin/ty check --python .venv --exclude tests/bench_stub.py app tests
+RUN .venv/bin/ruff format --check . \
+  && .venv/bin/ruff check . \
+  && .venv/bin/ty check --python .venv app tests \
+  && PYTHONPATH=. .venv/bin/pytest tests -q
 
 FROM debian:bookworm-20260421-slim
 
@@ -101,7 +100,6 @@ ARG PY_DIR
 ARG PY_EXE
 ARG PY_GIL_DISABLED_EXPECTED
 ARG PY_VERSION_EXPECTED
-ARG PY_PROJECT_DIR
 
 ENV PATH="/app/.venv/bin:/opt/python/${PY_DIR}/bin:/opt/uv:${PATH}" \
     LD_LIBRARY_PATH="/opt/python-runtime-libs" \
@@ -146,7 +144,7 @@ PY
 
 WORKDIR /app
 COPY --from=app-build /app/.venv ./.venv
-COPY ${PY_PROJECT_DIR}/pyproject.toml ${PY_PROJECT_DIR}/uv.lock ./
+COPY services/python-fastapi/pyproject.toml services/python-fastapi/uv.lock ./
 COPY services/python-fastapi/app ./app
 # Fail the build if the baked PY_VERSION_EXPECTED / PY_GIL_DISABLED_EXPECTED /
 # PY_VARIANT env disagrees with the interpreter (the same check runs at startup).

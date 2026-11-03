@@ -9,21 +9,21 @@ import pytest
 
 from app.runtime import assert_runtime, check_runtime, expected_runtime
 
-PY314 = (3, 14, 4)
 PY315 = (3, 15, 2)
+PY314 = (3, 14, 4)  # the removed lane: must now be rejected everywhere
 
 
 @pytest.mark.parametrize(
     ("env", "expected"),
     [
-        ({}, (PY314, True)),
-        ({"PY_VARIANT": "gil"}, (PY314, False)),
+        ({}, (PY315, True)),
+        ({"PY_VARIANT": "gil"}, (PY315, False)),
         ({"PY_VERSION_EXPECTED": "3.15.2", "PY_GIL_DISABLED_EXPECTED": "1"}, (PY315, True)),
         (
             {"PY_VERSION_EXPECTED": "3.15.2", "PY_GIL_DISABLED_EXPECTED": "0", "PY_VARIANT": "gil"},
             (PY315, False),
         ),
-        ({"PY_VERSION_EXPECTED": "3.14.4", "PY_VARIANT": "ft"}, (PY314, True)),
+        ({"PY_VERSION_EXPECTED": "3.15.2", "PY_VARIANT": "ft"}, (PY315, True)),
     ],
 )
 def test_expected_runtime_from_image_env(
@@ -38,6 +38,8 @@ def test_expected_runtime_from_image_env(
         {"PY_VERSION_EXPECTED": "3.15"},
         {"PY_VERSION_EXPECTED": "3.15.2t"},
         {"PY_VERSION_EXPECTED": "3.15.1"},  # not a pinned release
+        {"PY_VERSION_EXPECTED": "3.14.4"},  # removed lane
+        {"PY_VERSION_EXPECTED": "3.14.4", "PY_GIL_DISABLED_EXPECTED": "1"},
         {"PY_VERSION_EXPECTED": "3.14.10"},
         {"PY_GIL_DISABLED_EXPECTED": "true"},
         {"PY_GIL_DISABLED_EXPECTED": ""},
@@ -53,15 +55,13 @@ def test_expected_runtime_rejects_bad_or_contradictory_env(env: dict[str, str]) 
 def test_check_runtime_accepts_exact_matches() -> None:
     check_runtime(PY315, True, PY315, 1, False)
     check_runtime(PY315, False, PY315, 0, True)
-    check_runtime(PY314, True, PY314, 1, False)
-    check_runtime(PY314, False, PY314, 0, True)
 
 
 @pytest.mark.parametrize(
     ("expected", "expect_ft", "actual", "py_gil_disabled", "gil_enabled"),
     [
         (PY315, True, PY314, 1, False),  # 3.15 image running 3.14
-        (PY314, True, PY315, 1, False),  # 3.14 image running 3.15
+        (PY315, False, PY314, 0, True),  # 3.15 GIL image running 3.14
         (PY315, True, (3, 15, 1), 1, False),  # wrong patch release
         (PY315, True, PY315, 0, True),  # FT image on the GIL build
         (PY315, True, PY315, 1, True),  # FT build with the GIL re-enabled
@@ -83,9 +83,9 @@ def test_check_runtime_rejects_mismatches(
 
 
 def test_assert_runtime_matches_this_interpreter(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Whatever pinned interpreter runs the suite (pyenv 3.14.4t locally, the
-    # 3.15 images' test stage), the guard must accept it when told the truth
-    # and reject the opposite GIL state.
+    # Both images' test stages (3.15.2t and 3.15.2) run the suite: the guard
+    # must accept the interpreter when told the truth and reject the opposite
+    # GIL state.
     ft = sysconfig.get_config_var("Py_GIL_DISABLED") == 1
     monkeypatch.delenv("PY_VARIANT", raising=False)
     monkeypatch.setenv("PY_VERSION_EXPECTED", "{}.{}.{}".format(*sys.version_info[:3]))

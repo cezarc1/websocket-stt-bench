@@ -159,6 +159,8 @@ just conformance     # protocol contract check
 just bench-ladder rust-axum-single ws://127.0.0.1:3000/ws/stt
 ```
 
+The Python gateway's interpreters (CPython 3.15.2t / 3.15.2) are container-only, so `just python-check` (part of `just check`) runs in Docker.
+
 Local Compose runs the `single` or `multi` profile one at a time because profiles share host ports. Multi-vCPU capacity claims should be verified in-cluster; Compose under-reports once the gateway outpaces the in-VM inference simulator.
 
 For reproducible Kubernetes runs, use `charts/stt-bench/` and `charts/stt-bench/README.md`. The chart renders the inference server, gateway Deployments, suspended loadgen/inferbench Jobs, and results PVC. Analysis uses paired `*.summary.json` / `*.samples.csv` artifacts:

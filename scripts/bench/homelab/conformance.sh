@@ -20,8 +20,6 @@ ocamlOxcaml:stt-ocaml-oxcaml-gateway:9000
 ocamlWebsocketAsync:stt-ocaml-websocket-async-gateway:9100
 scalaPekko:stt-scala-pekko-gateway:2500
 elixir:stt-elixir-phoenix-gateway:4000
-pythonGil:stt-python-fastapi-gil-gateway:8000
-pythonFt:stt-python-fastapi-ft-gateway:8000
 pythonGil315:stt-python-fastapi-gil315-gateway:8000
 pythonFt315:stt-python-fastapi-ft315-gateway:8000"
 if [ -n "${ONLY:-}" ]; then GWS=$(printf "%s\n" "$GWS" | grep -E "^($(echo "$ONLY" | tr ' ' '|')):"); fi

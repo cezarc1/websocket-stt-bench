@@ -1,5 +1,7 @@
 # Python / FastAPI Benchmark Notes
 
+The gateway now ships on CPython 3.15.2 only: free-threaded 3.15.2t (image `python-fastapi-ft315`, chart key `pythonFt315`) and the GIL build 3.15.2 (image `python-fastapi-gil315`, chart key `pythonGil315`), from one lock in this directory. The measurements below were taken on the earlier CPython 3.14.4 / 3.14.4t images, which have been removed; they are kept as history until 3.15 numbers replace them.
+
 ## 2026-10-28 homelab re-run (split nodes, correctness-verified)
 
 Split nodes: gateway + loadgen on node `cezar-4090`, one 6-CPU inference replica on node `2080` across the LAN; images tagged `gateway-fixes`. Every measured partial was verified client-side (exact stub values + per-session frame continuity) and `correctness_errors` was 0 on every point below. Same harness (`scripts/bench/run_point.sh`: 10 s warmup, 45 s measured, 30 s ramp, 1000 ms spread) and SLO; confirmed = 2/2 passes. Not directly comparable with the earlier single-node sections below, which are kept as history (see the README note).

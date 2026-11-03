@@ -7,12 +7,11 @@ import sysconfig
 from collections.abc import Mapping
 from importlib.metadata import version
 
-# Exact interpreter releases this gateway ships on (versions.lock.toml [python]
-# and [python315]). Each image bakes PY_VERSION_EXPECTED and
-# PY_GIL_DISABLED_EXPECTED from its Dockerfile build args; without them (local
-# dev on pyenv 3.14.4t) the original 3.14.4 free-threading expectation applies.
-SUPPORTED_PYTHONS = frozenset({(3, 14, 4), (3, 15, 2)})
-DEFAULT_PYTHON = (3, 14, 4)
+# The one interpreter release this gateway ships on (versions.lock.toml
+# [python]). Each image bakes PY_VERSION_EXPECTED and PY_GIL_DISABLED_EXPECTED
+# from its Dockerfile build args; without them the free-threaded build of the
+# pinned release is expected.
+PINNED_PYTHON = (3, 15, 2)
 
 type Version = tuple[int, int, int]
 
@@ -21,13 +20,13 @@ def expected_runtime(env: Mapping[str, str]) -> tuple[Version, bool]:
     """Return (exact Python version, GIL-disabled build?) this process must run on."""
     raw_version = env.get("PY_VERSION_EXPECTED")
     if raw_version is None:
-        expected: Version = DEFAULT_PYTHON
+        expected: Version = PINNED_PYTHON
     else:
         parts = raw_version.split(".")
         if len(parts) != 3 or not all(p.isdigit() for p in parts):
             raise RuntimeError(f"PY_VERSION_EXPECTED must be X.Y.Z, got {raw_version!r}")
         expected = (int(parts[0]), int(parts[1]), int(parts[2]))
-    if expected not in SUPPORTED_PYTHONS:
+    if expected != PINNED_PYTHON:
         raise RuntimeError(f"PY_VERSION_EXPECTED={expected} is not a pinned interpreter")
 
     # PY_VARIANT=gil is the original GIL-build switch; it must agree with the

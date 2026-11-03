@@ -1,10 +1,10 @@
 {
   // ============================================================
-  //  Python  —  services/python-fastapi (CPython 3.14.4t free-threading)
+  //  Python  —  services/python-fastapi (CPython 3.15.2t / 3.15.2)
   // ============================================================
-  // Pin the interpreter to the uv-managed venv so Pylance/ruff/ty all agree.
-  "python.defaultInterpreterPath": "${workspaceFolder}/services/python-fastapi/.venv/bin/python",
-
+  // The pinned interpreters are container-only (no local venv); the gate
+  // `just python-check` runs ruff + ty + pytest inside the image's test stage.
+  //
   // The project's type-checker is Astral `ty` (see [tool.ty.environment] in
   // pyproject.toml), not Pylance. Turn Pylance type-checking off so squiggles
   // come from one source of truth — `just python-check` runs `ty check`.
