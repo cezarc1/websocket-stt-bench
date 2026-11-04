@@ -16,7 +16,7 @@ use std::{
 use anyhow::Context;
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
-use hdrhistogram::Histogram;
+use hdrhistogram::{Counter, Histogram};
 use serde::Serialize;
 use stt_loadgen::{
     protocol::{
@@ -29,8 +29,8 @@ use tokio::{
     time::{Instant, sleep_until, timeout},
 };
 use tokio_tungstenite::{
-    connect_async,
-    tungstenite::{Error as WsError, Message},
+    connect_async_with_config,
+    tungstenite::{Error as WsError, Message, protocol::WebSocketConfig},
 };
 use tracing::warn;
 use tracing_subscriber::{EnvFilter, fmt};
@@ -78,6 +78,23 @@ struct Args {
     /// `model_delay_ms` every partial must echo (gateway `MODEL_DELAY_MS`).
     #[arg(long, default_value_t = ExpectedConfig::default().model_delay_ms)]
     expect_model_delay_ms: u64,
+    /// WebSocket read buffer per session. tungstenite zero-fills this buffer
+    /// (up to its capacity) before every read attempt, and each session polls
+    /// its reader on every 20 ms send tick; at its 128 KiB default that
+    /// memset dominated loadgen CPU. Partials are well under 4 KiB.
+    #[arg(long, default_value_t = 4096)]
+    read_buffer_bytes: usize,
+    /// Set TCP_NODELAY on each client socket so Nagle never holds back a
+    /// 640-byte frame (that delay would be charged to the gateway).
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    tcp_nodelay: bool,
+}
+
+/// How each session's WebSocket client is configured.
+#[derive(Debug, Clone, Copy)]
+struct ClientConfig {
+    read_buffer_bytes: usize,
+    tcp_nodelay: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -305,6 +322,20 @@ impl Correctness {
         }
     }
 
+    /// A server message that could not be read as a response at all.
+    fn record_malformed(&self, session_id: usize, detail: String) {
+        self.record(
+            session_id,
+            "malformed",
+            0,
+            0,
+            &[Mismatch {
+                kind: MismatchKind::MalformedMessage,
+                detail,
+            }],
+        );
+    }
+
     fn snapshot(&self) -> (Vec<CorrectnessErrorCount>, Vec<CorrectnessErrorSample>) {
         let details = self
             .details
@@ -468,6 +499,18 @@ struct Output {
     newest_frame_to_partial_latency: Percentiles,
     oldest_frame_to_partial_latency: Percentiles,
     flush_lateness: Percentiles,
+    /// How late each measured frame send started vs. its schedule. Latency is
+    /// measured from the schedule, so all of this is charged to the gateway.
+    /// It is the loadgen's own delay (busy workers, its receive path, the
+    /// tokio timer's ~1 ms granularity) unless `send_block` is also large.
+    harness_lag: Percentiles,
+    harness_lag_samples: u64,
+    /// Session tasks that panicked or were cancelled (a loadgen bug): their
+    /// outcome and counters are missing, so the run cannot be judged.
+    harness_faults: u64,
+    /// Time spent inside each measured frame write: TCP back-pressure (the
+    /// gateway not reading) or a write that had to wait for the runtime.
+    send_block: Percentiles,
 }
 
 #[derive(Debug, Serialize)]
@@ -517,11 +560,18 @@ async fn main() -> anyhow::Result<()> {
             + Duration::from_secs(args.measure_secs)
             + Duration::from_secs(args.session_grace_secs),
     };
+    let client = ClientConfig {
+        read_buffer_bytes: args.read_buffer_bytes,
+        tcp_nodelay: args.tcp_nodelay,
+    };
+    let harness_lag = Arc::new(Mutex::new(lag_histogram()?));
+    let send_block = Arc::new(Mutex::new(lag_histogram()?));
     let (sample_tx, mut sample_rx) = mpsc::channel::<Sample>(8192);
     let run_start = Instant::now();
     let measure_start = run_start + pre_measure_delay;
     let end_at = measure_start + Duration::from_secs(args.measure_secs);
 
+    let mut session_tasks = Vec::with_capacity(args.sessions);
     for session_id in 0..args.sessions {
         let tx = sample_tx.clone();
         let errors = Arc::clone(&protocol_errors);
@@ -531,14 +581,19 @@ async fn main() -> anyhow::Result<()> {
         let session_correctness = Arc::clone(&correctness);
         let verify_tx = verifier.sender();
         let url = args.url.clone();
+        let lag_total = Arc::clone(&harness_lag);
+        let block_total = Arc::clone(&send_block);
+        let mut lag = lag_histogram()?;
+        let mut block = lag_histogram()?;
         let session_start_at = run_start
             + session_start_delay(session_id, args.sessions, ramp_up, session_start_spread);
-        tokio::spawn(async move {
+        session_tasks.push(tokio::spawn(async move {
             let outcome = timeout(
                 timeouts.session,
                 run_session(
                     session_id,
                     &url,
+                    client,
                     session_start_at,
                     measure_start,
                     end_at,
@@ -549,12 +604,24 @@ async fn main() -> anyhow::Result<()> {
                     inference_err_details,
                     session_correctness,
                     verify_tx,
+                    &mut lag,
+                    &mut block,
                 ),
             )
             .await
             .map_err(|_elapsed| ());
+            lag_total
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .add(&lag)
+                .ok();
+            block_total
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .add(&block)
+                .ok();
             record_session_outcome(session_id, outcome, &errors, &counters);
-        });
+        }));
     }
     drop(sample_tx);
 
@@ -594,7 +661,26 @@ async fn main() -> anyhow::Result<()> {
     }
     // Every session task has exited (sample_rx closed), so their verifier
     // senders are gone; drain the queue before reading correctness counters.
+    // The sample channel closes when each task's `run_session` returns, but
+    // each task still merges its lag histograms and records its outcome after
+    // that. Join every task before reading any counter; a panicked task is a
+    // loadgen bug, so the run is a harness fault (eval_slo: INVALID).
+    let mut harness_faults = 0_u64;
+    for task in session_tasks {
+        if let Err(error) = task.await {
+            harness_faults += 1;
+            warn!("session task failed: {error}");
+        }
+    }
     verifier.finish()?;
+    let harness_lag = harness_lag
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let send_block = send_block
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
 
     let inference_error_snapshot = inference_error_details
         .lock()
@@ -629,6 +715,10 @@ async fn main() -> anyhow::Result<()> {
         newest_frame_to_partial_latency: percentiles(&newest_hist),
         oldest_frame_to_partial_latency: percentiles(&oldest_hist),
         flush_lateness: percentiles(&flush_hist),
+        harness_lag: percentiles(&harness_lag),
+        harness_lag_samples: harness_lag.len(),
+        harness_faults,
+        send_block: percentiles(&send_block),
     };
 
     println!("{}", serde_json::to_string_pretty(&output)?);
@@ -639,6 +729,7 @@ async fn main() -> anyhow::Result<()> {
 async fn run_session(
     session_id: usize,
     url: &str,
+    client: ClientConfig,
     session_start_at: Instant,
     measure_start: Instant,
     end_at: Instant,
@@ -649,13 +740,16 @@ async fn run_session(
     inference_error_details: Arc<Mutex<InferenceErrorDetails>>,
     correctness: Arc<Correctness>,
     verify_tx: SyncSender<VerifyJob>,
+    lag: &mut Histogram<u32>,
+    block: &mut Histogram<u32>,
 ) -> anyhow::Result<()> {
     sleep_until(session_start_at).await;
     let mut check = SessionCheck::default();
     let (ws, _) = timed(
         timeouts.connect,
         async {
-            connect_async(url)
+            let config = WebSocketConfig::default().read_buffer_size(client.read_buffer_bytes);
+            connect_async_with_config(url, Some(config), client.tcp_nodelay)
                 .await
                 .with_context(|| format!("connect {url}"))
         },
@@ -686,6 +780,11 @@ async fn run_session(
     while Instant::now() < end_at {
         tokio::select! {
             () = sleep_until(next_tick), if Instant::now() < end_at => {
+                let woke = Instant::now();
+                let measured = next_tick >= measure_start;
+                if measured {
+                    lag.saturating_record(micros_since(woke, next_tick));
+                }
                 seq += 1;
                 // Latency is measured from the *scheduled* send time, not the
                 // actual one: if this task wakes late (busy loadgen host), that
@@ -707,6 +806,9 @@ async fn run_session(
                     "send pcm frame",
                 )
                 .await?;
+                if measured {
+                    block.saturating_record(micros_since(Instant::now(), woke));
+                }
                 next_tick += FRAME_INTERVAL;
             }
             message = read.next() => {
@@ -851,11 +953,29 @@ async fn process_inbound(
         Some(Err(error)) => return Err(error).context("read websocket message"),
     };
 
-    let Message::Text(text) = message else {
-        return Ok(InboundState::Open);
+    // A message that is not a valid `partial`/`error` is a correctness error
+    // whenever it arrives (warmup included), not a session failure: a failed
+    // session only spends the error budget, and a malformed response must
+    // fail the point outright. The session keeps running.
+    let text = match message {
+        Message::Text(text) => text,
+        Message::Binary(bytes) => {
+            correctness.record_malformed(
+                session_id,
+                format!("unexpected binary message ({} bytes)", bytes.len()),
+            );
+            return Ok(InboundState::Open);
+        }
+        // Ping/pong (and raw frames) are transport-level, not responses.
+        _ => return Ok(InboundState::Open),
     };
-    let server_message: ServerMessage =
-        serde_json::from_str(&text).context("decode server message")?;
+    let server_message: ServerMessage = match serde_json::from_str(&text) {
+        Ok(message) => message,
+        Err(error) => {
+            correctness.record_malformed(session_id, format!("decode server message: {error}"));
+            return Ok(InboundState::Open);
+        }
+    };
     let now = Instant::now();
     let measured = now >= measure_start && now <= end_at;
     let partial = match server_message {
@@ -899,7 +1019,21 @@ async fn process_inbound(
     let continuity = check
         .continuity
         .observe(partial.oldest_frame_seq, partial.newest_frame_seq);
-    partial.validate().context("validate partial")?;
+    if let Err(error) = partial.validate() {
+        let mut mismatches: Vec<Mismatch> = continuity.into_iter().collect();
+        mismatches.push(Mismatch {
+            kind: MismatchKind::InvalidPartial,
+            detail: format!("{error:#}"),
+        });
+        correctness.record(
+            session_id,
+            "partial",
+            partial.oldest_frame_seq,
+            partial.newest_frame_seq,
+            &mismatches,
+        );
+        return Ok(InboundState::Open);
+    }
     if !measured {
         return Ok(InboundState::Open);
     }
@@ -1018,7 +1152,17 @@ where
     }
 }
 
-fn percentiles(histogram: &Histogram<u64>) -> Percentiles {
+/// Per-session lag/block histogram (µs, 2 significant figures, ~9 KB),
+/// merged into the run total when the session ends.
+fn lag_histogram() -> anyhow::Result<Histogram<u32>> {
+    Histogram::new_with_bounds(1, 10_000_000, 2).context("harness lag histogram")
+}
+
+fn micros_since(now: Instant, since: Instant) -> u64 {
+    now.saturating_duration_since(since).as_micros() as u64
+}
+
+fn percentiles<T: Counter>(histogram: &Histogram<T>) -> Percentiles {
     let micros_to_ms = |micros: u64| micros as f64 / 1000.0;
     if histogram.is_empty() {
         return Percentiles {
@@ -1395,16 +1539,46 @@ mod tests {
         };
         let mut bad: serde_json::Value = serde_json::from_str(&text).unwrap();
         bad["transcript"] = "".into();
-        let err = h
+        // An invalid partial is a correctness error (fails the point), not a
+        // session failure that would only spend the error budget.
+        let state = h
             .feed(Message::Text(bad.to_string().into()))
             .await
-            .expect_err("empty transcript fails validate");
-        assert!(format!("{err:#}").contains("validate partial"));
+            .expect("invalid partial keeps the session open");
+        assert_eq!(state, InboundState::Open);
         // Next partial tiles after the invalid one: no double-counted gap.
         h.feed(partial_text(1, 101, 150)).await.expect("process");
         h.finish().await;
-        assert_eq!(h.correctness.errors.load(Ordering::Relaxed), 0);
+        assert_eq!(h.correctness.errors.load(Ordering::Relaxed), 1);
+        let (counts, _) = h.correctness.snapshot();
+        assert_eq!(counts.len(), 1);
+        assert_eq!(counts[0].kind, "invalid_partial");
         assert_eq!(h.check.continuity.last_newest(), 150);
+    }
+
+    #[tokio::test]
+    async fn malformed_and_binary_messages_are_correctness_errors() {
+        let mut h = Harness::new(2, 1, 200, 64);
+        h.feed(partial_text(2, 1, 50)).await.expect("process");
+        let Message::Text(text) = partial_text(2, 51, 100) else {
+            unreachable!()
+        };
+        let mut extra: serde_json::Value = serde_json::from_str(&text).unwrap();
+        extra["unexpected_field"] = 1.into();
+        for message in [
+            Message::Text("not json".into()),
+            Message::Text(extra.to_string().into()),
+            Message::Binary(vec![0_u8; 8].into()),
+        ] {
+            let state = h.feed(message).await.expect("session keeps running");
+            assert_eq!(state, InboundState::Open);
+        }
+        h.finish().await;
+        assert_eq!(h.correctness.errors.load(Ordering::Relaxed), 3);
+        let (counts, _) = h.correctness.snapshot();
+        assert_eq!(counts.len(), 1);
+        assert_eq!(counts[0].kind, "malformed_message");
+        assert_eq!(counts[0].count, 3);
     }
 
     #[tokio::test]

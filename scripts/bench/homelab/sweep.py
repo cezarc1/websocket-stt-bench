@@ -13,7 +13,13 @@ find the highest session count that passes the SLO using the tracked harness
 Every point also records:
   * gateway health before/after (a restart or liveness kill during a point
     makes it INVALID; it is re-run once). Cluster-API errors are retried and
-    never count as a restart.
+    never count as a restart. Every INVALID verdict from run_point.sh /
+    eval_slo.py (missing or malformed summary, loadgen crash/OOM/deadline,
+    incomplete verification, harness lag) is re-run once the same way.
+  * A point still INVALID after its re-run is neither a pass nor a fail. The
+    search treats it like a fail only to choose its direction; the result
+    lists it under `harness_capped`, and if it lies below every real fail the
+    ceiling is reported as a lower bound (`bounded_by: "harness"`).
   * CPU from the kubelet's cAdvisor endpoint over the measured window: gateway
     cores and CFS-throttled fraction, loadgen cores/throttling, inference cores.
     A point where the loadgen itself is constrained is flagged `loadgen_bound`.
@@ -272,6 +278,9 @@ class Sweep:
         if (lgt is not None and lgt > 0.02) or (lgc is not None and lgc > 0.85 * self.a.loadgen_cpu):
             rec["loadgen_bound"] = True
         restarted = h0 is None or h1 is None or h1[1] != h0[1]
+        # run_point/eval_slo: the measurement itself failed (loadgen crash, OOM,
+        # deadline, malformed summary, incomplete verification, harness lag).
+        harness = re.match(rf"^{n} INVALID\b", line) is not None
         # Running out of memory at this load is the gateway failing, not a fluke to retry.
         oom = restarted and h1 is not None and h1[2] == "OOMKilled"
         if oom:
@@ -279,18 +288,19 @@ class Sweep:
             rec["pass"] = False
             ok = False
             restarted = False
-        if restarted:
+        if restarted or harness:
             rec["invalid"] = True
         pts.write(json.dumps(rec) + "\n")
         pts.flush()
         flag = " INVALID(restart/unready)" if restarted else ""
+        flag += " INVALID(harness)" if harness else ""
         flag += " LOADGEN-BOUND" if rec.get("loadgen_bound") else ""
         flag += " OOM" if oom else ""
         self.log(f"{key} {line}{flag} | cpu {cpu} restarts {rec['restarts_before']}->{rec['restarts_after']}"
                  f" {rec['last_reason'] or ''}", fh)
-        if restarted and retry:
+        if (restarted or harness) and retry:
             return self.point(key, svc, port, n, fh, pts, retry=False)
-        return None if restarted else ok
+        return None if restarted or harness else ok
 
     # ---- bracket search ------------------------------------------------------
     @staticmethod
@@ -317,11 +327,11 @@ class Sweep:
         runs = {}  # n -> list[bool]
 
         def probe(n):
+            # runs[n] holds True (pass), False (fail) or None (INVALID after
+            # its re-run). None steers the search like a fail (downwards) but is
+            # never counted as one.
             if n not in runs:
-                r = self.point(key, svc, port, n, fh, pts)
-                if r is None:  # invalid twice: treat as fail but remember
-                    r = False
-                runs[n] = [r]
+                runs[n] = [self.point(key, svc, port, n, fh, pts)]
             return runs[n][0]
 
         try:
@@ -360,34 +370,71 @@ class Sweep:
             confirmed = None
             cand = lo
             while cand is not None and cand > 0:
-                while sum(runs.get(cand, [])) < 2 and False not in runs.get(cand, []):
+                while (runs.get(cand, []).count(True) < 2 and False not in runs.get(cand, [])
+                       and None not in runs.get(cand, [])):
                     r = self.point(key, svc, port, cand, fh, pts)
-                    runs.setdefault(cand, []).append(bool(r))
-                if False not in runs[cand]:
+                    runs.setdefault(cand, []).append(r)
+                if all(v is True for v in runs[cand]):
                     confirmed = cand
                     break
-                self.log(f"{key} {cand} {'borderline' if any(runs[cand]) else 'fail'} {runs[cand]}", fh)
+                kind = ("invalid" if None in runs[cand] and False not in runs[cand]
+                        else "borderline" if True in runs[cand] else "fail")
+                self.log(f"{key} {cand} {kind} {runs[cand]}", fh)
                 # Step down one step at a time (never jump to an older passing probe), so
                 # the confirmed ceiling always sits one step below an unconfirmed point.
                 cand -= self.step_for(cand - 1)
                 if cand <= 0:
                     break
                 if cand not in runs:
-                    runs[cand] = [bool(self.point(key, svc, port, cand, fh, pts))]
-                    if not runs[cand][0]:
+                    runs[cand] = [self.point(key, svc, port, cand, fh, pts)]
+                    if runs[cand][0] is not True:
                         continue
-            above = sorted(k for k, v in runs.items() if confirmed is None or k > confirmed)
-            first_fail = next((k for k in above if not any(runs[k])), None)
-            borderline = {str(k): runs[k] for k in above if any(runs[k]) and not all(runs[k])}
-            res = {"key": key, "prior": prior, "confirmed": confirmed, "first_solid_fail": first_fail,
-                   "borderline": borderline, "runs": {str(k): v for k, v in sorted(runs.items())},
+            res = {"key": key, "prior": prior, **summarize_runs(runs, confirmed),
+                   "runs": {str(k): v for k, v in sorted(runs.items())},
                    "image_tag": self.a.image_tag, "placement": self.a.placement}
             (self.out / f"{key}.result.json").write_text(json.dumps(res, indent=2))
-            self.log(f"=== {key} RESULT confirmed={confirmed} first_solid_fail={first_fail} "
-                     f"borderline={borderline} ===", fh)
+            self.log(f"=== {key} RESULT confirmed={confirmed} first_solid_fail={res['first_solid_fail']} "
+                     f"bounded_by={res['bounded_by']} harness_capped={res['harness_capped']} "
+                     f"borderline={res['borderline']} ===", fh)
         finally:
             self.helm(chart_key, 0)
             self.log(f"{key} scaled to 0", fh)
+
+
+def summarize_runs(runs, confirmed):
+    """What bounds the ceiling, from every point's outcomes (True/False/None).
+
+    A point is a solid fail when its valid outcomes are all fails, borderline
+    when it has both, and harness-capped when every outcome is INVALID. If a
+    harness-capped point sits below the first solid fail, the gateway was never
+    shown to fail there: the ceiling is only a lower bound.
+
+    >>> summarize_runs({100: [True, True], 125: [False]}, 100)["bounded_by"]
+    'gateway'
+    >>> r = summarize_runs({100: [True, True], 125: [None], 150: [None]}, 100)
+    >>> r["bounded_by"], r["first_solid_fail"], r["harness_capped"]
+    ('harness', None, [125, 150])
+    >>> summarize_runs({100: [True, True], 125: [None], 150: [False]}, 100)["bounded_by"]
+    'harness'
+    >>> summarize_runs({100: [True, True], 125: [False, None]}, 100)["first_solid_fail"]
+    125
+    >>> summarize_runs({100: [True, True], 125: [True, False]}, 100)["borderline"]
+    {'125': [True, False]}
+    >>> summarize_runs({100: [None]}, None)["bounded_by"]
+    'harness'
+    """
+    above = sorted(k for k in runs if confirmed is None or k > confirmed)
+
+    def valid(k):
+        return [v for v in runs[k] if v is not None]
+
+    first_fail = next((k for k in above if valid(k) and not any(valid(k))), None)
+    capped = [k for k in above if not valid(k)]
+    borderline = {str(k): runs[k] for k in above if True in runs[k] and False in runs[k]}
+    harness_first = capped and (first_fail is None or capped[0] < first_fail)
+    return {"confirmed": confirmed, "first_solid_fail": first_fail, "borderline": borderline,
+            "harness_capped": capped,
+            "bounded_by": "harness" if harness_first else "gateway" if first_fail else None}
 
 
 def main():
@@ -403,8 +450,13 @@ def main():
     p.add_argument("--loadgen-threads", type=int, default=None, help="default: --loadgen-cpu")
     p.add_argument("--loadgen-cpuset", default="4-11", help="taskset CPU list for the loadgen")
     p.add_argument("--verify-every", type=int, default=1)
+    p.add_argument("--all", action="store_true", help="sweep every gateway shape")
     p.add_argument("keys", nargs="*")
     a = p.parse_args()
+    # No keys must never mean "everything": a caller whose admission list came
+    # out empty (every gateway failed conformance) would otherwise sweep them all.
+    if not a.keys and not a.all:
+        sys.exit("no gateway keys given (pass keys, or --all)")
     sw = Sweep(a)
     for k in a.keys or list(ALL):
         if k not in ALL:

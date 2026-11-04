@@ -39,6 +39,7 @@
 #                 values; continuity is always checked)
 #   LOADGEN_THREADS  Tokio worker threads (default LOADGEN_CPU). Set explicitly:
 #                 an idle surplus of workers costs CPU the gateway may need.
+#   LOADGEN_ARGS  extra stt-loadgen flags (A/B harness settings only)
 #   LOADGEN_CPUSET   pin the loadgen process to these host CPUs with taskset
 #                 (e.g. 16-31, the E-cores on an i9-13900); default: unpinned
 set -euo pipefail
@@ -62,6 +63,7 @@ LOADGEN_NODE="${LOADGEN_NODE:-}"
 VERIFY_EVERY="${VERIFY_EVERY:-1}"
 LOADGEN_THREADS="${LOADGEN_THREADS:-$LOADGEN_CPU}"
 LOADGEN_CPUSET="${LOADGEN_CPUSET:-}"
+LOADGEN_ARGS="${LOADGEN_ARGS:-}"
 PIN=""
 [ -n "$LOADGEN_CPUSET" ] && PIN="taskset -c ${LOADGEN_CPUSET}"
 NODE_SELECTOR=""
@@ -105,6 +107,7 @@ spec:
               set -eu
               mkdir -p /results
               sleep 5
+              rc=0
               TOKIO_WORKER_THREADS=${LOADGEN_THREADS} ${PIN} stt-loadgen \
                 --url ${GW_URL} \
                 --service-name ${PREFIX} \
@@ -115,14 +118,19 @@ spec:
                 --session-start-spread-ms ${SPREAD} \
                 --repeat 1 \
                 --verify-every ${VERIFY_EVERY} \
+                ${LOADGEN_ARGS} \
                 --samples-out /results/${PREFIX}.samples.csv \
-                > /results/${PREFIX}.summary.json 2>/results/${PREFIX}.warn.log || true
+                > /results/${PREFIX}.summary.json 2>/results/${PREFIX}.warn.log || rc=\$?
+              # The driver needs the exit status: a crashed loadgen is a
+              # harness fault (INVALID), never a gateway FAIL.
+              echo "::loadgen-exit::\$rc"
               if [ -s /results/${PREFIX}.warn.log ]; then
                 echo "::loadgen-warn-log::"
                 cat /results/${PREFIX}.warn.log
                 echo "::summary-json::"
               fi
               cat /results/${PREFIX}.summary.json
+              exit \$rc
           resources:
             requests: { cpu: "${LOADGEN_CPU}", memory: ${LOADGEN_MEM} }
             limits: { cpu: "${LOADGEN_CPU}", memory: ${LOADGEN_MEM} }
@@ -154,6 +162,20 @@ printf '%s\n' "$LOG" \
     ' > "${RESULTS_DIR}/${PREFIX}.warn.log"
 printf '%s' "$JSON" > "${RESULTS_DIR}/${PREFIX}.summary.json"
 
-printf '%s' "$JSON" | python3 "$(dirname "$0")/eval_slo.py" "$SESS"
+# Only a loadgen that ran to completion and exited 0 produced a judgeable
+# summary. Anything else (deadline hit, container killed or OOM, non-zero exit)
+# is INVALID: the measurement failed, not the gateway.
+RC=$(printf '%s\n' "$LOG" | sed -n 's/^::loadgen-exit::\([0-9][0-9]*\)$/\1/p' | head -1)
+REASON=$(kubectl "${KCTX[@]}" -n "$NS" get pod "${POD}" \
+  -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}' 2>/dev/null || true)
+if [ "$PHASE" != "Succeeded" ] && [ "$PHASE" != "Failed" ]; then
+  echo "$SESS INVALID loadgen-deadline (phase=${PHASE:-none} after ${BUDGET}s)"
+elif [ -z "$RC" ]; then
+  echo "$SESS INVALID loadgen-killed (phase=$PHASE reason=${REASON:-unknown})"
+elif [ "$RC" != "0" ]; then
+  echo "$SESS INVALID loadgen-exit=$RC (reason=${REASON:-none})"
+else
+  printf '%s' "$JSON" | python3 "$(dirname "$0")/eval_slo.py" "$SESS"
+fi
 
 kubectl "${KCTX[@]}" -n "$NS" delete job "$JOB" --ignore-not-found >/dev/null 2>&1 || true

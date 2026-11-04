@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # In-cluster black-box conformance for every 1-vCPU gateway at once.
 #   scripts/bench/homelab/conformance.sh [image-tag] [placement-values]
-# ONLY="chartKey1 chartKey2" limits the run. Scales the gateways back to 0.
+# ONLY="chartKey1 chartKey2" limits the run. LOADGEN_TAG picks the stt-conformance
+# image (default: the gateway tag). Scales the gateways back to 0.
 set -uo pipefail
 TAG=${1:-colocated-rerun}
 PLACEMENT=${2:-values-colocated.yaml}
+LOADGEN_TAG=${LOADGEN_TAG:-$TAG}
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 K=(kubectl --context cezar-4090-cluster -n stt-bench --request-timeout=30s)
 H=(helm --kube-context cezar-4090-cluster -n stt-bench)
@@ -52,7 +54,7 @@ spec:
       imagePullSecrets: [ { name: ghcr-pull-secret } ]
       containers:
         - name: conformance
-          image: ghcr.io/cezarc1/websocket-stt-bench/loadgen:$TAG
+          image: ghcr.io/cezarc1/websocket-stt-bench/loadgen:$LOADGEN_TAG
           imagePullPolicy: Always
           command: ["stt-conformance"]
           args: ["--service", "${svc}=ws://${svc}.stt-bench.svc.cluster.local:${port}/ws/stt"]

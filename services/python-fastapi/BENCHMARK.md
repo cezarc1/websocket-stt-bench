@@ -1,5 +1,18 @@
 # Python / FastAPI Benchmark Notes
 
+## 2026-11-04 run9 (fixed loadgen; current README numbers)
+
+Same node, pod shape, pinning, gateway images (`colocated-rerun`) and SLO as the 2026-11-02/03 runs below; the load generator is the fixed one (`loadgen:harness-7cf15e8`: 4 KiB WebSocket read buffer instead of tungstenite's 128 KiB, which it zero-filled on every read attempt; `TCP_NODELAY` on; harness-integrity verdicts). The old loadgen's own overhead was charged to the gateway as latency, so every earlier ceiling in this file is understated. One full pass: in-cluster conformance on all 13 gateways, then every 1-vCPU and 2-vCPU sweep (`scripts/bench/homelab/full-pass.sh`). At every passing point every partial was verified and loadgen send-lag p99 stayed ≤ 5 ms; every sweep was bounded by the gateway. Single pass, so read each ceiling as ±1 step. Raw logs: `results/homelab/run9-full/` (gitignored).
+
+| Pass | vCPU | Confirmed | First solid fail | Borderline | Fail reason at first solid fail | Gateway cores at that fail |
+|---|---:|---:|---:|---|---|---:|
+| 3.15.2t free-threaded run9 | 1 | **1450** | 1500 | — | `newest_p50=252>200;oldest_p50=1231>1200` | 1.00 |
+| 3.15.2 GIL run9 | 1 | **1450** | 1500 | — | `newest_p50=257>200;newest_p95=374>350;oldest_p50=1240>1200` | 1.00 |
+| 3.15.2t free-threaded run9 | 2 | **2500** | 2600 | — | `newest_p50=201>200` | 2.00 |
+| 3.15.2 GIL run9 | 2 | **1950** | 2000 | — | `err_rate=2.22e-05>1e-5 (2/89909)` | 2.00 |
+
+The GIL build's 2-vCPU edge fails on the error budget (2 connect timeouts), at 2.00 cores. 2 vCPU runs `GRANIAN_LOOPS=2` / `WORKER_THREADS=2`.
+
 The gateway now ships on CPython 3.15.2 only: free-threaded 3.15.2t (image `python-fastapi-ft315`, chart key `pythonFt315`) and the GIL build 3.15.2 (image `python-fastapi-gil315`, chart key `pythonGil315`), from one lock in this directory. The measurements below were taken on the earlier CPython 3.14.4 / 3.14.4t images, which have been removed; they are kept as history until 3.15 numbers replace them.
 
 ## 2026-11-02/03 homelab runs (co-located, pinned, correctness-verified)

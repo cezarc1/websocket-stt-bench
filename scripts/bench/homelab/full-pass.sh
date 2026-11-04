@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # One full homelab pass: conformance for every gateway on the exact images,
-# then every 1-vCPU and 2-vCPU ceiling sweep.  scripts/bench/homelab/full-pass.sh <out-dir> [tag]
+# then every 1-vCPU and 2-vCPU ceiling sweep.  scripts/bench/homelab/full-pass.sh <out-dir> [gateway-tag] [loadgen-tag]
 set -uo pipefail
-OUT=${1:?out dir}; TAG=${2:-colocated-rerun}
+OUT=${1:?out dir}; TAG=${2:-colocated-rerun}; LGTAG=${3:-$TAG}
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"; cd "$REPO"; mkdir -p "$OUT/1vcpu" "$OUT/2vcpu"
 ONE="rustSync cpp23UWebsockets rust ocamlOxcamlEpoll javaHelidonNima typescriptBun goNethttp ocamlOxcaml ocamlWebsocketAsync scalaPekko elixir pythonGil315 pythonFt315"
 # Single-loop runtimes (OCaml, Bun) cannot use a second vCPU and are not swept at 2.
@@ -12,16 +12,26 @@ TWO="rustSync-2vcpu cpp23UWebsockets-2vcpu rust-2vcpu javaHelidonNima-2vcpu goNe
 set -- $ONE
 B1="${*:1:8}"; B2="${*:9}"
 for batch in "$B1" "$B2"; do
-  ONLY="$batch" scripts/bench/homelab/conformance.sh "$TAG" >> "$OUT/conformance.log" 2>&1
+  ONLY="$batch" LOADGEN_TAG="$LGTAG" scripts/bench/homelab/conformance.sh "$TAG" >> "$OUT/conformance.log" 2>&1
 done
 cat "$OUT/conformance.log"
+# Admit a gateway only on an exact "<its own service> ... ok" line. Fail closed:
+# an unknown key or a service name we can't resolve is never admitted (the
+# first GWS entry starts with `GWS="`, which a bare `^key:` never matched,
+# leaving an empty name that matched any other gateway's ok line).
 ok=()
 for k in $ONE; do
-  svc=$(grep -E "^$k:" scripts/bench/homelab/conformance.sh | cut -d: -f2)
-  if grep -q "$svc \.\.\. ok" "$OUT/conformance.log"; then ok+=("$k"); else echo "SKIP $k: conformance failed"; fi
+  svc=$(grep -E "^(GWS=\")?$k:" scripts/bench/homelab/conformance.sh | head -1 | sed 's/^GWS="//' | cut -d: -f2)
+  if [ -z "$svc" ]; then echo "SKIP $k: no conformance entry"; continue; fi
+  if grep -qE "^\[[0-9:]+\] $svc \.\.\. ok$" "$OUT/conformance.log"; then ok+=("$k"); else echo "SKIP $k: conformance failed"; fi
 done
+# 2-vCPU shapes are admitted on their 1-vCPU image's conformance (same image,
+# more CPU). Their final configuration is not separately conformance-tested.
 two=()
 for k in $TWO; do printf '%s\n' "${ok[@]}" | grep -qx "${k%-2vcpu}" && two+=("$k"); done
-scripts/bench/homelab/sweep.py --out "$OUT/1vcpu" --image-tag "$TAG" "${ok[@]}" > "$OUT/sweep-1vcpu.log" 2>&1
-scripts/bench/homelab/sweep.py --out "$OUT/2vcpu" --image-tag "$TAG" "${two[@]}" > "$OUT/sweep-2vcpu.log" 2>&1
+if [ ${#ok[@]} -eq 0 ]; then echo "no gateway passed conformance; nothing to sweep"; exit 1; fi
+scripts/bench/homelab/sweep.py --out "$OUT/1vcpu" --image-tag "$TAG" --loadgen-tag "$LGTAG" "${ok[@]}" > "$OUT/sweep-1vcpu.log" 2>&1
+if [ ${#two[@]} -gt 0 ]; then
+  scripts/bench/homelab/sweep.py --out "$OUT/2vcpu" --image-tag "$TAG" --loadgen-tag "$LGTAG" "${two[@]}" > "$OUT/sweep-2vcpu.log" 2>&1
+fi
 grep RESULT "$OUT"/sweep-*.log

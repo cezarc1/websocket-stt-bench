@@ -212,6 +212,15 @@ final class SessionTest {
         return BufferData.create(data);
     }
 
+    /// Waits until the session's writer has sent at least `count` text frames to `ws`.
+    private static void awaitTextSends(FakeWsSession ws, int count) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (ws.events.stream().filter("text"::equals).count() < count) {
+            assertTrue(System.nanoTime() < deadline, "expected " + count + " text sends, got " + ws.events);
+            Thread.sleep(5);
+        }
+    }
+
     private static Session started(FakeWsSession ws) {
         Session session = newSession(STUB);
         session.onMessage(ws, START, true);
@@ -439,7 +448,9 @@ final class SessionTest {
                 session.onMessage(ws, bytes(Protocol.FRAME_BYTES, (byte) 1), true);
             }
             session.tryFlush(0.0);
-            assertNotNull(session.outbox.poll(1, TimeUnit.SECONDS));
+            // A started session's writer thread drains the outbox to the socket, so polling the
+            // outbox here would race it; wait for the partial to reach the socket instead.
+            awaitTextSends(ws, round + 1);
         }
         assertEquals(0, ws.closeCode);
         session.onClose(ws, 1000, "normal");

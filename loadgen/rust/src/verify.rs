@@ -87,6 +87,11 @@ pub enum MismatchKind {
     /// At session end, more than [`TAIL_TOLERANCE_FRAMES`] sent frames were
     /// never covered by any partial or error frame.
     MissingTail,
+    /// A server message that is not a valid `partial` or `error` (bad JSON,
+    /// unknown or missing fields, or a binary message).
+    MalformedMessage,
+    /// A `partial` that parsed but failed `PartialMessage::validate`.
+    InvalidPartial,
     Frames,
     AudioBytes,
     CpuPasses,
@@ -107,6 +112,8 @@ impl MismatchKind {
             Self::UnsentFrame => "unsent_frame",
             Self::RangeTooLarge => "range_too_large",
             Self::MissingTail => "missing_tail",
+            Self::MalformedMessage => "malformed_message",
+            Self::InvalidPartial => "invalid_partial",
             Self::Frames => "frames",
             Self::AudioBytes => "audio_bytes",
             Self::CpuPasses => "cpu_passes",

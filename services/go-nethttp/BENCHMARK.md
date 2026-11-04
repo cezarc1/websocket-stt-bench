@@ -1,5 +1,16 @@
 # Go / net-http Benchmark Notes
 
+## 2026-11-04 run9 (fixed loadgen; current README numbers)
+
+Same node, pod shape, pinning, gateway images (`colocated-rerun`) and SLO as the 2026-11-02/03 runs below; the load generator is the fixed one (`loadgen:harness-7cf15e8`: 4 KiB WebSocket read buffer instead of tungstenite's 128 KiB, which it zero-filled on every read attempt; `TCP_NODELAY` on; harness-integrity verdicts). The old loadgen's own overhead was charged to the gateway as latency, so every earlier ceiling in this file is understated. One full pass: in-cluster conformance on all 13 gateways, then every 1-vCPU and 2-vCPU sweep (`scripts/bench/homelab/full-pass.sh`). At every passing point every partial was verified and loadgen send-lag p99 stayed ≤ 5 ms; every sweep was bounded by the gateway. Single pass, so read each ceiling as ±1 step. Raw logs: `results/homelab/run9-full/` (gitignored).
+
+| Pass | vCPU | Confirmed | First solid fail | Borderline | Fail reason at first solid fail | Gateway cores at that fail |
+|---|---:|---:|---:|---|---|---:|
+| run9 | 1 | **3250** | 3400 | 3350 (1/2 pass) | `newest_p50=216>200;newest_p95=358>350;oldest_p50=1208>1200` | 1.00 |
+| run9 | 2 | **4400** | 4500 | — | `newest_p95=379>350` | 1.42 |
+
+At 2 vCPU the gateway again fails newest p95 at about 1.42 of 2 cores with no throttling (same shape as run3/run4; cause not isolated).
+
 ## 2026-11-02/03 homelab runs (co-located, pinned, correctness-verified)
 
 One k3s node (i9-13900F); gateway pinned to P-cores 0,2 with a 1- or 2-vCPU quota and 4 GiB, loadgen on 4-11 (8 Tokio workers), inference on 12-15. Two independent full passes (run3, run4) after in-cluster conformance on the same images, plus targeted re-runs where listed (run5: C++ 2 vCPU; run6: OCaml 2 vCPU; run7: re-measured with the step-down sweep fix); the README reports the lowest confirmed value. "Confirmed" = every repeat passed (≥2/2) and the next step failed. Raw logs: `results/homelab/` (gitignored).
