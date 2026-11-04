@@ -27,31 +27,32 @@ from matplotlib.patches import Patch
 
 # (name, sessions at 1 vCPU, sessions at 2 vCPU or None, application LOC,
 #  label dx_pts, dy_pts, horizontal alignment)
-# Sessions are the lowest valid confirmed ceiling across the run3/run4 full passes and
-# targeted re-runs
-# (2026-11-02/03 co-located, pinned homelab; README TL;DR). For most runtimes,
-# application LOC equals raw production LOC. The OCaml raw-transport variants
-# exclude the generic first-party WebSocket/HTTP/SHA-1/base64/masking shim so
-# package code is treated consistently.
+# Sessions are the confirmed ceilings from the run9 full pass (2026-11-04,
+# co-located, pinned homelab, fixed loadgen; README TL;DR). 2 vCPU is None
+# where it was not measured in run9 (single-loop runtimes and Bun). For most
+# runtimes, application LOC equals raw production LOC. The OCaml raw-transport
+# variants exclude the generic first-party WebSocket/HTTP/SHA-1/base64/masking
+# shim so package code is treated consistently.
 RUNTIMES: list[tuple[str, int, int | None, int, int, int, str]] = [
-    ("Rust / mio", 4800, 5100, 1221, 10, -16, "left"),
-    ("C++23 / uWebSockets", 4100, 5800, 1551, 10, -14, "left"),
-    ("Async Rust / Tokio", 3350, 5000, 696, 10, 10, "left"),
-    ("oxcaml-epoll", 3000, 3000, 1680, -10, 10, "right"),
-    ("TypeScript / Bun", 2750, None, 734, -10, 10, "right"),
-    ("Java / Helidon Nima", 2500, 3900, 917, -10, 10, "right"),
-    ("Go / net/http", 2500, 3050, 893, 10, -4, "left"),
-    ("OxCaml", 2100, 2025, 879, 8, -16, "left"),
-    ("OCaml", 1800, 1850, 850, -10, 6, "right"),
-    ("Elixir / Phoenix", 1250, 2200, 784, 10, 10, "left"),
-    ("Python 3.15 (GIL)", 1250, 1900, 678, 10, -14, "left"),
-    ("Python 3.15t (free-threaded)", 1250, 2000, 678, -10, 10, "right"),
-    ("Scala / Pekko", 1150, 1850, 726, -10, 8, "right"),
+    ("C++23 / uWebSockets", 8300, 9000, 1551, -10, 10, "right"),
+    ("Rust / mio", 7500, 8700, 1221, -10, 10, "right"),
+    ("Async Rust / Tokio", 5100, 8300, 696, 10, 10, "left"),
+    ("oxcaml-epoll", 4800, None, 1680, -10, 10, "right"),
+    ("TypeScript / Bun", 3400, None, 734, 10, 10, "left"),
+    ("Go / net/http", 3250, 4400, 893, 10, -4, "left"),
+    ("Java / Helidon Nima", 3200, 5600, 917, -10, 8, "right"),
+    ("OxCaml", 3200, None, 879, 10, -16, "left"),
+    ("OCaml", 2600, None, 850, -10, 4, "right"),
+    ("Python 3.15 (GIL)", 1450, 1950, 678, 10, -14, "left"),
+    ("Python 3.15t (free-threaded)", 1450, 2500, 678, -10, 10, "right"),
+    ("Elixir / Phoenix", 1350, 2400, 784, 10, 10, "left"),
+    ("Scala / Pekko", 1300, 2050, 726, -10, 8, "right"),
 ]
 
 # Strict Pareto-optimal points: no other runtime has BOTH higher sessions
 # AND lower LOC. Highlighted in yellow in the rendered chart.
 PARETO = {
+    "C++23 / uWebSockets",
     "Rust / mio",
     "Async Rust / Tokio",
     "Python 3.15 (GIL)",
@@ -61,7 +62,7 @@ PARETO = {
 SCATTER_MERGED = {"Python 3.15t (free-threaded)"}
 SCATTER_LABELS = {"Python 3.15 (GIL)": "Python 3.15 (GIL and free-threaded)"}
 
-RUN_LABEL = "2026-11 co-located, pinned homelab run"
+RUN_LABEL = "2026-11-04 run9, co-located, pinned homelab"
 ONE_VCPU, TWO_VCPU = "#2a78d6", "#eb6834"  # validated categorical slots 1-2
 
 DEFAULT_OUT = Path("docs/loc-vs-capacity.png")
@@ -108,7 +109,7 @@ def render(out_path: Path) -> None:
     ax.grid(True, linestyle=":", alpha=0.25, zorder=0)
     ax.set_axisbelow(True)
 
-    ax.set_xlim(800, 5200)
+    ax.set_xlim(800, 9200)
     ax.set_ylim(600, 1800)
 
     fig.text(
@@ -191,8 +192,8 @@ def render_vcpu(out_path: Path) -> None:
     fig.text(
         0.99,
         0.01,
-        "n/m = not measured (Bun at 2 vCPU; its limit is its fetch client, not CPU). "
-        "C++ 2 vCPU ranged 5800-6300 across four valid sweeps; the lowest is shown.",
+        "n/m = not measured in run9 (single-loop runtimes, which can't use a second core, and Bun). "
+        "C++ at 2 vCPU fails on inference-request timeouts, not its own CPU.",
         ha="right",
         va="bottom",
         fontsize=8.5,

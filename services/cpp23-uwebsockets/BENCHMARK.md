@@ -1,5 +1,16 @@
 # C++23 / uWebSockets Benchmark Notes
 
+## 2026-11-04 run9 (fixed loadgen; current README numbers)
+
+Same node, pod shape, pinning, gateway images (`colocated-rerun`) and SLO as the 2026-11-02/03 runs below; the load generator is the fixed one (`loadgen:harness-7cf15e8`: 4 KiB WebSocket read buffer instead of tungstenite's 128 KiB, which it zero-filled on every read attempt; `TCP_NODELAY` on; harness-integrity verdicts). The old loadgen's own overhead was charged to the gateway as latency, so every earlier ceiling in this file is understated. One full pass: in-cluster conformance on all 13 gateways, then every 1-vCPU and 2-vCPU sweep (`scripts/bench/homelab/full-pass.sh`). At every passing point every partial was verified and loadgen send-lag p99 stayed ≤ 5 ms; every sweep was bounded by the gateway. Single pass, so read each ceiling as ±1 step. Raw logs: `results/homelab/run9-full/` (gitignored).
+
+| Pass | vCPU | Confirmed | First solid fail | Borderline | Fail reason at first solid fail | Gateway cores at that fail |
+|---|---:|---:|---:|---|---|---:|
+| run9 | 1 | **8300** | 8400 | — | `newest_p50=237>200;oldest_p50=1217>1200;err_rate=1.85e-05>1e-5 (7/378976)` | 1.00 |
+| run9 | 2 | **9000** | 9200 | 9100 (1/2 pass) | `err_rate=4.75e-05>1e-5 (19/399708)` | 1.70 |
+
+At 2 vCPU the edge fails on the error budget, not latency: every error is the gateway's inference request timing out (`Timeout was reached`), while the gateway uses about 1.75 of its 2 cores with no throttling and newest p50/p95 stay near 117/150 ms. Inference was at about 1.6 cores on its 4 logical CPUs (12-15, two physical P-cores), above anything measured before, so this ceiling may be set by the shared inference path rather than by C++; it was not isolated. At the failing 9100/9200 points the loadgen's verifier also dropped 13-17k partials (those points fail on observed errors either way; the passing 9000 and 9100 runs were fully verified). Above about 7500 sessions the loadgen's send-lag p999 is 45-62 ms (p99 ≤ 5 ms).
+
 ## 2026-11-02/03 homelab runs (co-located, pinned, correctness-verified)
 
 One k3s node (i9-13900F); gateway pinned to P-cores 0,2 with a 1- or 2-vCPU quota and 4 GiB, loadgen on 4-11 (8 Tokio workers), inference on 12-15. Two independent full passes (run3, run4) after in-cluster conformance on the same images, plus targeted re-runs where listed (run5: C++ 2 vCPU; run6: OCaml 2 vCPU; run7: re-measured with the step-down sweep fix); the README reports the lowest confirmed value. "Confirmed" = every repeat passed (≥2/2) and the next step failed. Raw logs: `results/homelab/` (gitignored).

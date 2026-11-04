@@ -1,5 +1,15 @@
 # TypeScript / Bun Benchmark Notes
 
+## 2026-11-04 run9 (fixed loadgen; current README numbers)
+
+Same node, pod shape, pinning, gateway images (`colocated-rerun`) and SLO as the 2026-11-02/03 runs below; the load generator is the fixed one (`loadgen:harness-7cf15e8`: 4 KiB WebSocket read buffer instead of tungstenite's 128 KiB, which it zero-filled on every read attempt; `TCP_NODELAY` on; harness-integrity verdicts). The old loadgen's own overhead was charged to the gateway as latency, so every earlier ceiling in this file is understated. One full pass: in-cluster conformance on all 13 gateways, then every 1-vCPU and 2-vCPU sweep (`scripts/bench/homelab/full-pass.sh`). At every passing point every partial was verified and loadgen send-lag p99 stayed ≤ 5 ms; every sweep was bounded by the gateway. Single pass, so read each ceiling as ±1 step. Raw logs: `results/homelab/run9-full/` (gitignored).
+
+| Pass | vCPU | Confirmed | First solid fail | Borderline | Fail reason at first solid fail | Gateway cores at that fail |
+|---|---:|---:|---:|---|---|---:|
+| run9 | 1 | **3400** | 3600 | 3500 (1/2 pass) | `newest_p95=1796>350;oldest_p95=3054>1650;err_rate=2.51e-01>1e-5 (21172/84246)` | 0.92 |
+
+Passing points use about 0.8 of the core; above 3400 Bun collapses (at 3600: 21,172 errors). Under that overload the loadgen also caught correctness errors — partials with wrong or misattributed values (36 at 3700, 1,795 at 3900) — which earlier runs did not gate on. Not measured at 2 vCPU (single event loop).
+
 ## 2026-11-02/03 homelab runs (co-located, pinned, correctness-verified)
 
 One k3s node (i9-13900F); gateway pinned to P-cores 0,2 with a 1- or 2-vCPU quota and 4 GiB, loadgen on 4-11 (8 Tokio workers), inference on 12-15. Two independent full passes (run3, run4) after in-cluster conformance on the same images, plus targeted re-runs where listed (run5: C++ 2 vCPU; run6: OCaml 2 vCPU; run7: re-measured with the step-down sweep fix); the README reports the lowest confirmed value. "Confirmed" = every repeat passed (≥2/2) and the next step failed. Raw logs: `results/homelab/` (gitignored).

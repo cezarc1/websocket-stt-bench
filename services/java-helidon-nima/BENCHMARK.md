@@ -1,5 +1,16 @@
 # Java / Helidon Níma Benchmark Notes
 
+## 2026-11-04 run9 (fixed loadgen; current README numbers)
+
+Same node, pod shape, pinning, gateway images (`colocated-rerun`) and SLO as the 2026-11-02/03 runs below; the load generator is the fixed one (`loadgen:harness-7cf15e8`: 4 KiB WebSocket read buffer instead of tungstenite's 128 KiB, which it zero-filled on every read attempt; `TCP_NODELAY` on; harness-integrity verdicts). The old loadgen's own overhead was charged to the gateway as latency, so every earlier ceiling in this file is understated. One full pass: in-cluster conformance on all 13 gateways, then every 1-vCPU and 2-vCPU sweep (`scripts/bench/homelab/full-pass.sh`). At every passing point every partial was verified and loadgen send-lag p99 stayed ≤ 5 ms; every sweep was bounded by the gateway. Single pass, so read each ceiling as ±1 step. Raw logs: `results/homelab/run9-full/` (gitignored).
+
+| Pass | vCPU | Confirmed | First solid fail | Borderline | Fail reason at first solid fail | Gateway cores at that fail |
+|---|---:|---:|---:|---|---|---:|
+| run9 | 1 | **3200** | 3300 | — | `newest_p95=531>350;oldest_p95=6468>1650;err_rate=1.32e-01>1e-5 (2844/21517)` | 0.16 |
+| run9 | 2 | **5600** | 5650 | — | `newest_p95=3690>350;oldest_p95=5927>1650;err_rate=1.30e-02>1e-5 (2583/198249)` | 1.87 |
+
+Both edges are tail-latency cliffs rather than gradual degradation: at 1 vCPU 3300 the gateway stalls (0.16 cores, 2,844 errors, oldest p95 6.5 s); at 2 vCPU 5650 newest p95 jumps to 3.7 s.
+
 ## 2026-11-02/03 homelab runs (co-located, pinned, correctness-verified)
 
 One k3s node (i9-13900F); gateway pinned to P-cores 0,2 with a 1- or 2-vCPU quota and 4 GiB, loadgen on 4-11 (8 Tokio workers), inference on 12-15. Two independent full passes (run3, run4) after in-cluster conformance on the same images, plus targeted re-runs where listed (run5: C++ 2 vCPU; run6: OCaml 2 vCPU; run7: re-measured with the step-down sweep fix); the README reports the lowest confirmed value. "Confirmed" = every repeat passed (≥2/2) and the next step failed. Raw logs: `results/homelab/` (gitignored).
