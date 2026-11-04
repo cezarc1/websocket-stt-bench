@@ -15,13 +15,23 @@ for batch in "$B1" "$B2"; do
   ONLY="$batch" scripts/bench/homelab/conformance.sh "$TAG" >> "$OUT/conformance.log" 2>&1
 done
 cat "$OUT/conformance.log"
+# Admit a gateway only on an exact "<its own service> ... ok" line. Fail closed:
+# an unknown key or a service name we can't resolve is never admitted (the
+# first GWS entry starts with `GWS="`, which a bare `^key:` never matched,
+# leaving an empty name that matched any other gateway's ok line).
 ok=()
 for k in $ONE; do
-  svc=$(grep -E "^$k:" scripts/bench/homelab/conformance.sh | cut -d: -f2)
-  if grep -q "$svc \.\.\. ok" "$OUT/conformance.log"; then ok+=("$k"); else echo "SKIP $k: conformance failed"; fi
+  svc=$(grep -E "^(GWS=\")?$k:" scripts/bench/homelab/conformance.sh | head -1 | sed 's/^GWS="//' | cut -d: -f2)
+  if [ -z "$svc" ]; then echo "SKIP $k: no conformance entry"; continue; fi
+  if grep -qE "^\[[0-9:]+\] $svc \.\.\. ok$" "$OUT/conformance.log"; then ok+=("$k"); else echo "SKIP $k: conformance failed"; fi
 done
+# 2-vCPU shapes are admitted on their 1-vCPU image's conformance (same image,
+# more CPU). Their final configuration is not separately conformance-tested.
 two=()
 for k in $TWO; do printf '%s\n' "${ok[@]}" | grep -qx "${k%-2vcpu}" && two+=("$k"); done
+if [ ${#ok[@]} -eq 0 ]; then echo "no gateway passed conformance; nothing to sweep"; exit 1; fi
 scripts/bench/homelab/sweep.py --out "$OUT/1vcpu" --image-tag "$TAG" "${ok[@]}" > "$OUT/sweep-1vcpu.log" 2>&1
-scripts/bench/homelab/sweep.py --out "$OUT/2vcpu" --image-tag "$TAG" "${two[@]}" > "$OUT/sweep-2vcpu.log" 2>&1
+if [ ${#two[@]} -gt 0 ]; then
+  scripts/bench/homelab/sweep.py --out "$OUT/2vcpu" --image-tag "$TAG" "${two[@]}" > "$OUT/sweep-2vcpu.log" 2>&1
+fi
 grep RESULT "$OUT"/sweep-*.log

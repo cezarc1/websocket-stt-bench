@@ -322,6 +322,20 @@ impl Correctness {
         }
     }
 
+    /// A server message that could not be read as a response at all.
+    fn record_malformed(&self, session_id: usize, detail: String) {
+        self.record(
+            session_id,
+            "malformed",
+            0,
+            0,
+            &[Mismatch {
+                kind: MismatchKind::MalformedMessage,
+                detail,
+            }],
+        );
+    }
+
     fn snapshot(&self) -> (Vec<CorrectnessErrorCount>, Vec<CorrectnessErrorSample>) {
         let details = self
             .details
@@ -491,6 +505,9 @@ struct Output {
     /// tokio timer's ~1 ms granularity) unless `send_block` is also large.
     harness_lag: Percentiles,
     harness_lag_samples: u64,
+    /// Session tasks that panicked or were cancelled (a loadgen bug): their
+    /// outcome and counters are missing, so the run cannot be judged.
+    harness_faults: u64,
     /// Time spent inside each measured frame write: TCP back-pressure (the
     /// gateway not reading) or a write that had to wait for the runtime.
     send_block: Percentiles,
@@ -554,6 +571,7 @@ async fn main() -> anyhow::Result<()> {
     let measure_start = run_start + pre_measure_delay;
     let end_at = measure_start + Duration::from_secs(args.measure_secs);
 
+    let mut session_tasks = Vec::with_capacity(args.sessions);
     for session_id in 0..args.sessions {
         let tx = sample_tx.clone();
         let errors = Arc::clone(&protocol_errors);
@@ -569,7 +587,7 @@ async fn main() -> anyhow::Result<()> {
         let mut block = lag_histogram()?;
         let session_start_at = run_start
             + session_start_delay(session_id, args.sessions, ramp_up, session_start_spread);
-        tokio::spawn(async move {
+        session_tasks.push(tokio::spawn(async move {
             let outcome = timeout(
                 timeouts.session,
                 run_session(
@@ -603,7 +621,7 @@ async fn main() -> anyhow::Result<()> {
                 .add(&block)
                 .ok();
             record_session_outcome(session_id, outcome, &errors, &counters);
-        });
+        }));
     }
     drop(sample_tx);
 
@@ -643,6 +661,17 @@ async fn main() -> anyhow::Result<()> {
     }
     // Every session task has exited (sample_rx closed), so their verifier
     // senders are gone; drain the queue before reading correctness counters.
+    // The sample channel closes when each task's `run_session` returns, but
+    // each task still merges its lag histograms and records its outcome after
+    // that. Join every task before reading any counter; a panicked task is a
+    // loadgen bug, so the run is a harness fault (eval_slo: INVALID).
+    let mut harness_faults = 0_u64;
+    for task in session_tasks {
+        if let Err(error) = task.await {
+            harness_faults += 1;
+            warn!("session task failed: {error}");
+        }
+    }
     verifier.finish()?;
     let harness_lag = harness_lag
         .lock()
@@ -688,6 +717,7 @@ async fn main() -> anyhow::Result<()> {
         flush_lateness: percentiles(&flush_hist),
         harness_lag: percentiles(&harness_lag),
         harness_lag_samples: harness_lag.len(),
+        harness_faults,
         send_block: percentiles(&send_block),
     };
 
@@ -923,11 +953,29 @@ async fn process_inbound(
         Some(Err(error)) => return Err(error).context("read websocket message"),
     };
 
-    let Message::Text(text) = message else {
-        return Ok(InboundState::Open);
+    // A message that is not a valid `partial`/`error` is a correctness error
+    // whenever it arrives (warmup included), not a session failure: a failed
+    // session only spends the error budget, and a malformed response must
+    // fail the point outright. The session keeps running.
+    let text = match message {
+        Message::Text(text) => text,
+        Message::Binary(bytes) => {
+            correctness.record_malformed(
+                session_id,
+                format!("unexpected binary message ({} bytes)", bytes.len()),
+            );
+            return Ok(InboundState::Open);
+        }
+        // Ping/pong (and raw frames) are transport-level, not responses.
+        _ => return Ok(InboundState::Open),
     };
-    let server_message: ServerMessage =
-        serde_json::from_str(&text).context("decode server message")?;
+    let server_message: ServerMessage = match serde_json::from_str(&text) {
+        Ok(message) => message,
+        Err(error) => {
+            correctness.record_malformed(session_id, format!("decode server message: {error}"));
+            return Ok(InboundState::Open);
+        }
+    };
     let now = Instant::now();
     let measured = now >= measure_start && now <= end_at;
     let partial = match server_message {
@@ -971,7 +1019,21 @@ async fn process_inbound(
     let continuity = check
         .continuity
         .observe(partial.oldest_frame_seq, partial.newest_frame_seq);
-    partial.validate().context("validate partial")?;
+    if let Err(error) = partial.validate() {
+        let mut mismatches: Vec<Mismatch> = continuity.into_iter().collect();
+        mismatches.push(Mismatch {
+            kind: MismatchKind::InvalidPartial,
+            detail: format!("{error:#}"),
+        });
+        correctness.record(
+            session_id,
+            "partial",
+            partial.oldest_frame_seq,
+            partial.newest_frame_seq,
+            &mismatches,
+        );
+        return Ok(InboundState::Open);
+    }
     if !measured {
         return Ok(InboundState::Open);
     }
@@ -1477,16 +1539,46 @@ mod tests {
         };
         let mut bad: serde_json::Value = serde_json::from_str(&text).unwrap();
         bad["transcript"] = "".into();
-        let err = h
+        // An invalid partial is a correctness error (fails the point), not a
+        // session failure that would only spend the error budget.
+        let state = h
             .feed(Message::Text(bad.to_string().into()))
             .await
-            .expect_err("empty transcript fails validate");
-        assert!(format!("{err:#}").contains("validate partial"));
+            .expect("invalid partial keeps the session open");
+        assert_eq!(state, InboundState::Open);
         // Next partial tiles after the invalid one: no double-counted gap.
         h.feed(partial_text(1, 101, 150)).await.expect("process");
         h.finish().await;
-        assert_eq!(h.correctness.errors.load(Ordering::Relaxed), 0);
+        assert_eq!(h.correctness.errors.load(Ordering::Relaxed), 1);
+        let (counts, _) = h.correctness.snapshot();
+        assert_eq!(counts.len(), 1);
+        assert_eq!(counts[0].kind, "invalid_partial");
         assert_eq!(h.check.continuity.last_newest(), 150);
+    }
+
+    #[tokio::test]
+    async fn malformed_and_binary_messages_are_correctness_errors() {
+        let mut h = Harness::new(2, 1, 200, 64);
+        h.feed(partial_text(2, 1, 50)).await.expect("process");
+        let Message::Text(text) = partial_text(2, 51, 100) else {
+            unreachable!()
+        };
+        let mut extra: serde_json::Value = serde_json::from_str(&text).unwrap();
+        extra["unexpected_field"] = 1.into();
+        for message in [
+            Message::Text("not json".into()),
+            Message::Text(extra.to_string().into()),
+            Message::Binary(vec![0_u8; 8].into()),
+        ] {
+            let state = h.feed(message).await.expect("session keeps running");
+            assert_eq!(state, InboundState::Open);
+        }
+        h.finish().await;
+        assert_eq!(h.correctness.errors.load(Ordering::Relaxed), 3);
+        let (counts, _) = h.correctness.snapshot();
+        assert_eq!(counts.len(), 1);
+        assert_eq!(counts[0].kind, "malformed_message");
+        assert_eq!(counts[0].count, 3);
     }
 
     #[tokio::test]

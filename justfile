@@ -61,7 +61,12 @@ analysis-sync: ensure-uv
 analysis-test: analysis-sync
     cd analysis && ../.tools/bin/uv run pytest tests/ -q
 
-analysis-check: analysis-sync analysis-test
+# Harness verdict logic (eval_slo gates, sweep bracketing): stdlib-only tests.
+harness-test:
+    python3 -B scripts/bench/test_eval_slo.py
+    cd scripts/bench/homelab && python3 -B -m doctest sweep.py && echo "sweep doctests: ok"
+
+analysis-check: analysis-sync analysis-test harness-test
     cd analysis && ../.tools/bin/uv run ruff format --check .
     cd analysis && ../.tools/bin/uv run ruff check .
     cd analysis && ../.tools/bin/uv run ty check
